@@ -3,8 +3,10 @@
 import { chromium } from "playwright-core";
 import fs from "node:fs";
 
-const BASE = "http://127.0.0.1:8000";
-const OUT = "D:\\workbuddy-projects\\park-scheduling\\docs\\shots";
+const BASE = process.env.BASE_URL || "http://127.0.0.1:8000";
+const OUT = process.env.OUT_DIR || "D:\\workbuddy-projects\\park-scheduling\\docs\\shots";
+const USER = process.env.ADMIN_USER || "admin";
+const PASS = process.env.ADMIN_PASS || "admin123456";
 const mode = process.argv[2] || "mobile";
 
 const PAGES = [
@@ -44,8 +46,8 @@ for (const t of targets) {
   page.on("pageerror", (e) => errors.push(e.message));
 
   await page.goto(`${BASE}/login/`, { waitUntil: "networkidle" });
-  await page.fill('input[autocomplete="username"]', "admin");
-  await page.fill('input[type="password"]', "admin123456");
+  await page.fill('input[autocomplete="username"]', USER);
+  await page.fill('input[type="password"]', PASS);
   await page.click('button:has-text("登录")');
   await page.waitForURL(`${BASE}/`, { timeout: 20000 });
 

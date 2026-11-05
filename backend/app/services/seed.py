@@ -87,6 +87,85 @@ def _calendar_for(db: Session, start: dt.date, end: dt.date) -> None:
     db.commit()
 
 
+EMPLOYEE_TYPES = [
+    ("long_term", "长期员工", True),
+    ("part_time", "兼职", False),
+    ("intern", "实习生", False),
+    ("other", "其他", False),
+]
+
+POSITION_COLORS = {
+    "A1": "#0ea5e9", "B1": "#0284c7", "A2": "#6366f1", "B2": "#dc2626",
+    "A3": "#0891b2", "B3": "#0e7490", "A7": "#f59e0b", "B7": "#d97706",
+    "A8": "#10b981", "B8": "#059669", "AK": "#8b5cf6", "BK": "#6d28d9",
+}
+
+
+def seed_base(db: Session, days_before: int = 3, days_ahead: int = 60) -> dict:
+    """生产环境基础数据初始化（幂等）：只写岗位/模板/角色/类型/日历。
+
+    不写入任何示例员工、请假、搭班偏好或排班记录，可安全用于真实环境。
+    """
+    ensure_defaults(db)
+    stats = {"employee_types": 0, "roles": 0, "positions": 0, "templates": 0, "calendar_days": 0}
+
+    for i, (code, name, formal) in enumerate(EMPLOYEE_TYPES):
+        if not db.query(EmployeeTypeOption).filter(EmployeeTypeOption.code == code).first():
+            db.add(EmployeeTypeOption(code=code, name=name, counts_as_formal=formal, sort_order=i))
+            stats["employee_types"] += 1
+
+    for code, name, shift, bound, extra, desc in ROLES:
+        if not db.query(OperationalRole).filter(OperationalRole.code == code).first():
+            db.add(
+                OperationalRole(
+                    code=code, name=name, shift=shift, bound_position_code=bound,
+                    counts_extra_slot=extra, description=desc,
+                    color={"duty_supervisor": "#dc2626", "early_support": "#7c3aed", "late_support": "#7c3aed"}[code],
+                )
+            )
+            stats["roles"] += 1
+
+    for i, (code, name, dept, area, shift, allowed, min_sup, role) in enumerate(POSITIONS):
+        if not db.query(Position).filter(Position.code == code).first():
+            db.add(
+                Position(
+                    code=code, name=name, department=dept, area=area, shift=shift,
+                    start_time="09:00" if shift == "early" else "13:30",
+                    end_time="17:00" if shift == "early" else "22:30",
+                    allowed_employment_types=allowed, min_supervisors=min_sup,
+                    supervisor_role_code=role, is_active=True, sort_order=i * 10,
+                    color=POSITION_COLORS.get(code, "#64748b"),
+                )
+            )
+            stats["positions"] += 1
+
+    for day_type, mapping in TEMPLATES.items():
+        for code, count in mapping.items():
+            if not db.query(DemandTemplate).filter(
+                DemandTemplate.day_type == day_type, DemandTemplate.position_code == code
+            ).first():
+                db.add(DemandTemplate(day_type=day_type, position_code=code, target_count=count, min_count=count))
+                stats["templates"] += 1
+
+    db.commit()
+
+    today = dt.date.today()
+    start = today - dt.timedelta(days=days_before)
+    end = today + dt.timedelta(days=days_ahead)
+    stats["calendar_days"] = (
+        db.query(CalendarDay)
+        .filter(CalendarDay.work_date >= start, CalendarDay.work_date <= end)
+        .count()
+    )
+    _calendar_for(db, start, end)
+    stats["calendar_days"] = (
+        db.query(CalendarDay)
+        .filter(CalendarDay.work_date >= start, CalendarDay.work_date <= end)
+        .count()
+    )
+    return stats
+
+
 def seed_all(db: Session, force: bool = False) -> dict:
     ensure_defaults(db)
     if db.query(Employee).count() > 0 and not force:
