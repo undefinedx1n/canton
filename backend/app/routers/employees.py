@@ -17,6 +17,7 @@ from ..models import (
     PairingPreference,
     Position,
     ScheduleAssignment,
+    ScheduleVersion,
     User,
 )
 from ..schemas import (
@@ -170,12 +171,16 @@ def batch_delete_employees(
         {"employee_id": i, "name": "", "reason": "员工不存在或已被删除"} for i in ids if i not in found
     ]
 
-    # 只有真正要物理删除时才查排班引用，避免多做无用的聚合
+    # 只有真正要物理删除时才查排班引用，避免多做无用的聚合。
+    # 口径：只统计**已发布**版本 —— 草稿是临时产物，随删除一起清理即可；
+    # 已发布版本才是对外生效、需要保留可追溯性的班表。
     assigned: dict[int, int] = {}
     if mode == "purge":
         rows = (
             db.query(ScheduleAssignment.employee_id, func.count(ScheduleAssignment.id))
+            .join(ScheduleVersion, ScheduleVersion.id == ScheduleAssignment.version_id)
             .filter(ScheduleAssignment.employee_id.in_([e.id for e in emps]))
+            .filter(ScheduleVersion.status == "published")
             .group_by(ScheduleAssignment.employee_id)
             .all()
         )
@@ -202,6 +207,7 @@ def batch_delete_employees(
                 )
                 continue
             # 手动清理关联，SQLite 默认不启用外键级联，不能只依赖 ondelete=CASCADE
+            db.query(ScheduleAssignment).filter(ScheduleAssignment.employee_id == emp.id).delete(synchronize_session=False)
             db.query(EmployeePositionSkill).filter(EmployeePositionSkill.employee_id == emp.id).delete(synchronize_session=False)
             db.query(AvailabilityRequest).filter(AvailabilityRequest.employee_id == emp.id).delete(synchronize_session=False)
             db.query(PairingPreference).filter(

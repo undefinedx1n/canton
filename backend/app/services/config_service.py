@@ -54,6 +54,7 @@ DEFAULT_SETTINGS: dict[str, tuple[dict[str, Any], str]] = {
             "weekend_fairness": 30,
             "holiday_fairness": 22,
             "peak_fairness": 18,
+            "fairness_excess": 130,
             "rest_balance": 14,
             "shift_preference": 9,
             "position_priority": 7,

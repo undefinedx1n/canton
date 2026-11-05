@@ -167,6 +167,47 @@ def test_rolling_windows_accumulate_fairly(db, six_supervisors):
     )
 
 
+def test_peak_is_subset_of_weekend_both_stay_balanced(db):
+    """回归：线上日历里高峰日恰好全部落在周末，两个公平目标会互相压制。
+
+    真实缺陷：原实现下 peak 分布为 [0,1,1,2,2,2]（极差 2，下界 1），
+    因为压 weekend 的收益(权重30)大于压 peak(权重18)，求解器选择牺牲 peak。
+    修复后「超出下界的人次」汇总成一个目标，不再在指标间做权重交易。
+    """
+    start = dt.date(2026, 11, 1)  # 与线上一致的周日起 30 天
+    dates = [start + dt.timedelta(days=i) for i in range(30)]
+    for d in dates:
+        weekend = d.weekday() >= 5
+        # 11/1 是周日但不是高峰，其余周末均为高峰 —— 复刻线上 calendar_days
+        set_day(db, d, "weekend" if weekend else "weekday", is_peak=weekend and d.day != 1)
+    force_demand(db, dates, {"B2": 1}, zero_others=True)
+
+    problem = build_problem(db, start, 30)
+    result = solve(problem, mode="draft", timeout=60)
+    sups = _all_supervisors(db)
+
+    stat = {s.id: {"duty": 0, "weekend": 0, "peak": 0} for s in sups}
+    for a in result.assignments:
+        if a["employee_id"] not in stat or a.get("role_code") != "duty_supervisor":
+            continue
+        cal = problem.calendar.get(a["work_date"], {})
+        stat[a["employee_id"]]["duty"] += 1
+        if a["work_date"].weekday() >= 5:
+            stat[a["employee_id"]]["weekend"] += 1
+        if cal.get("is_peak"):
+            stat[a["employee_id"]]["peak"] += 1
+
+    n = len(sups)
+    for key, label in (("duty", "总当值"), ("weekend", "周末"), ("peak", "高峰")):
+        vals = [stat[s.id][key] for s in sups]
+        total = sum(vals)
+        if total == 0:
+            continue
+        assert max(vals) - min(vals) <= _optimal_spread(total, n), (
+            f"{label}分布 {sorted(vals)} 未达均衡下界（共 {total} 次 / {n} 人）"
+        )
+
+
 def test_fairness_never_breaks_leave_hard_constraint(db, month, six_supervisors):
     """均衡是软目标：不得为了拉平次数而安排请假中的人。"""
     from app.models import AvailabilityRequest

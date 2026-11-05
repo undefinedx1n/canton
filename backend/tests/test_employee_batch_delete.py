@@ -125,6 +125,31 @@ def test_batch_delete_rejects_empty_and_unknown_mode(client, db):
     assert db.get(Employee, emp.id).is_active is True, "参数非法时不得产生副作用"
 
 
+def test_draft_version_does_not_block_purge(client, db):
+    """草稿是临时产物，不应阻止人员档案清理；已发布版本才需要保留可追溯性。
+
+    线上验收时踩到过：把 19 名验收员工列入草稿后无法删除，全部被降级为停用。
+    """
+    emp = _make(db, "只在草稿里的人", "BD070")
+    version = make_published_version(
+        db,
+        start=dt.date(2026, 6, 1),
+        days=1,
+        assignments=[{"work_date": dt.date(2026, 6, 1), "employee_id": emp.id, "position_code": "B1"}],
+    )
+    version.status = "draft"
+    db.commit()
+
+    resp = client.post("/api/employees/batch-delete", json={"employee_ids": [emp.id], "mode": "purge"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["purged"] == 1, "草稿版本不应阻止物理删除"
+
+    db.expire_all()
+    assert db.get(Employee, emp.id) is None
+    assert db.query(ScheduleAssignment).filter(ScheduleAssignment.employee_id == emp.id).count() == 0
+    assert db.get(type(version), version.id) is not None, "版本本身保留，只是移除了该员工的排班行"
+
+
 def test_batch_delete_is_idempotent_and_audited(client, db):
     a = _make(db, "审计甲", "BD060")
     b = _make(db, "审计乙", "BD061")

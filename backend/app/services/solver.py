@@ -473,7 +473,22 @@ def _solve_cpsat(problem: Problem, mode: str, timeout: float, seed: int) -> Solv
         duty_terms: dict[int, list[Any]] = {eid: [] for eid in supervisors}
         for (d, eid, _code), var in duty_role_vars.items():
             duty_terms[eid].append(var)
-        _add_fairness(md, buckets, "duty_fairness", supervisors, duty_terms, problem.history, "duty", w["duty_fairness"], "duty")
+
+        # 各公平指标的「超标人次」汇总成一个目标，避免它们在同一权重体系里互相压制
+        excess_pool: list[Any] = []
+        _add_fairness(
+            md,
+            buckets,
+            "duty_fairness",
+            supervisors,
+            duty_terms,
+            problem.history,
+            "duty",
+            w["duty_fairness"],
+            "duty",
+            expected_total=_duty_target_total(dates, positions, problem.demands),
+            excess_pool=excess_pool,
+        )
 
         subsets = [
             ("weekend_fairness", "weekend_duty", "wk", lambda d: d.weekday() >= 5),
@@ -488,7 +503,31 @@ def _solve_cpsat(problem: Problem, mode: str, timeout: float, seed: int) -> Solv
             for (d, eid, _code), var in duty_role_vars.items():
                 if d in days:
                     subset_terms[eid].append(var)
-            _add_fairness(md, buckets, key, supervisors, subset_terms, problem.history, hist_key, w[key], tag)
+            _add_fairness(
+                md,
+                buckets,
+                key,
+                supervisors,
+                subset_terms,
+                problem.history,
+                hist_key,
+                w[key],
+                tag,
+                expected_total=_duty_target_total(dates, positions, problem.demands, predicate),
+                excess_pool=excess_pool,
+            )
+
+        if excess_pool:
+            # 权重取低于缺口惩罚(400)、高于单个公平项，确保「能均衡时一定均衡」
+            _pen(
+                md,
+                buckets,
+                "fairness_excess",
+                sum(excess_pool),
+                w.get("fairness_excess", 130),
+                "fair_excess",
+                999,
+            )
 
     # 休息目标（长期员工周期内应休天数）
     rest_rule = problem.settings.get("rest_rule", {})
@@ -653,7 +692,31 @@ def _solve_cpsat(problem: Problem, mode: str, timeout: float, seed: int) -> Solv
     )
 
 
-def _add_fairness(md, buckets, key, employees, terms_map, history, hist_key, weight, tag):
+def _add_fairness(
+    md,
+    buckets,
+    key,
+    employees,
+    terms_map,
+    history,
+    hist_key,
+    weight,
+    tag,
+    *,
+    expected_total: int = 0,
+    excess_pool: list | None = None,
+):
+    """最小化「最大值 − 最小值」的极差。
+
+    单靠加权极差有个固有问题：几个公平目标（总当值 / 周末 / 节假日 / 高峰）会互相
+    压制 —— 为了保住权重高的周末均衡，求解器宁可让高峰分布多偏一个人次。
+    因此这里做两层处理：
+
+    1. `buckets[key]` 只留 0.5 倍权重的基础压力，用于同等达标时再比精细；
+    2. 超出「均摊下界」（0 或 1）的部分单独计入 `excess_pool`，由调用方汇总成一个
+       `fairness_excess` 目标。这样求解器优先减少「各项超标的合计人次」，
+       而不是在指标之间做权重交易。
+    """
     if len(employees) <= 1 or weight <= 0:
         return
     totals = []
@@ -668,7 +731,32 @@ def _add_fairness(md, buckets, key, employees, terms_map, history, hist_key, wei
     md.AddMinEquality(mn, totals)
     spread = md.NewIntVar(0, 999, f"{tag}_spread_{key}")
     md.Add(spread == mx - mn)
-    buckets[key].append((spread, float(weight)))
+    buckets[key].append((spread, float(weight) * 0.5))
+
+    n = len(employees)
+    # 均摊后必然出现的极差：整除为 0，不整除为 1
+    base = 1 if (expected_total > 0 and expected_total % n) else 0
+    excess = md.NewIntVar(0, 999, f"{tag}_ex_{key}")
+    md.Add(excess >= spread - base)
+    if excess_pool is not None:
+        excess_pool.append(excess)
+
+
+def _duty_target_total(dates, positions, demands, predicate=None) -> int:
+    """按需求目标估算「当值主管」应产生的人次，用来推算均衡下界。
+
+    实际排班可能因人员不足低于该值；估高只会让下界更宽松，不会误伤。
+    """
+    total = 0
+    for d in dates:
+        if predicate is not None and not predicate(d):
+            continue
+        for code, pos in positions.items():
+            if pos.supervisor_role_code != "duty_supervisor":
+                continue
+            total += demands.get((d, code), (0, 0))[0]
+    return total
+
 
 
 # --------------------------------------------------------------------------- #
