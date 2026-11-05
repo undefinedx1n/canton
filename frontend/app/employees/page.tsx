@@ -39,6 +39,9 @@ export default function EmployeesPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [importData, setImportData] = useState<any>(null);
   const [importing, setImporting] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [batchMode, setBatchMode] = useState<"deactivate" | "purge" | null>(null);
+  const [batchRunning, setBatchRunning] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -114,6 +117,41 @@ export default function EmployeesPage() {
     }
   }
 
+  function toggleSelect(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function runBatch() {
+    if (!batchMode || selected.size === 0) return;
+    setBatchRunning(true);
+    try {
+      const res = await post<any>("/api/employees/batch-delete", {
+        employee_ids: [...selected],
+        mode: batchMode,
+      });
+      const parts = [];
+      if (res.deactivated) parts.push(`停用 ${res.deactivated} 人`);
+      if (res.purged) parts.push(`删除 ${res.purged} 人`);
+      const blocked = (res.skipped || []).filter((s: any) => s.reason.includes("排班记录"));
+      toast.push(parts.length ? parts.join("，") : "没有需要变更的员工", parts.length ? "ok" : "info");
+      if (blocked.length) {
+        toast.push(`${blocked.length} 人因存在排班记录改为停用，可在提示中查看`, "info");
+      }
+      setSelected(new Set());
+      setBatchMode(null);
+      await load();
+    } catch (e: any) {
+      toast.push(e?.message || "批量操作失败", "error");
+    } finally {
+      setBatchRunning(false);
+    }
+  }
+
   async function previewImport(file: File) {
     const fd = new FormData();
     fd.append("file", file);
@@ -163,6 +201,19 @@ export default function EmployeesPage() {
     if (typeFilter && e.employment_type !== typeFilter) return false;
     return true;
   });
+
+  const allSelected = filtered.length > 0 && filtered.every((e) => selected.has(e.id));
+  const someSelected = filtered.some((e) => selected.has(e.id)) && !allSelected;
+  const selectedList = employees.filter((e) => selected.has(e.id));
+
+  function toggleAll() {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelected) filtered.forEach((e) => next.delete(e.id));
+      else filtered.forEach((e) => next.add(e.id));
+      return next;
+    });
+  }
 
   return (
     <AppShell>
@@ -217,6 +268,21 @@ export default function EmployeesPage() {
               共 {employees.length} 人（主管 {employees.filter((e) => e.is_supervisor).length} 人 · 导师 {employees.filter((e) => e.is_mentor).length} 人）
             </span>
           </div>
+          {selected.size > 0 ? (
+            <div className="flex flex-wrap items-center gap-2 border-b border-line bg-brand-50/60 px-3 py-2 text-[12px]">
+              <span className="font-medium text-brand-800">已选 {selected.size} 人</span>
+              <button className="btn btn-sm" onClick={() => setBatchMode("deactivate")}>
+                批量停用
+              </button>
+              <button className="btn btn-sm border-rose-200 text-rose-600 hover:bg-rose-50" onClick={() => setBatchMode("purge")}>
+                批量删除
+              </button>
+              <button className="btn btn-sm btn-ghost" onClick={() => setSelected(new Set())}>
+                取消选择
+              </button>
+              <span className="ml-auto text-[11px] text-slate-500">停用可随时恢复；删除不可撤销</span>
+            </div>
+          ) : null}
           {loading ? (
             <div className="p-4">
               <Spinner />
@@ -226,6 +292,19 @@ export default function EmployeesPage() {
               <table className="table">
                 <thead>
                   <tr>
+                    <th className="w-10">
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 cursor-pointer accent-brand-600"
+                        checked={allSelected}
+                        ref={(el) => {
+                          if (el) el.indeterminate = someSelected;
+                        }}
+                        onChange={toggleAll}
+                        title={allSelected ? "取消全选" : "全选当前筛选结果"}
+                        aria-label="全选"
+                      />
+                    </th>
                     <th>姓名</th>
                     <th>类型</th>
                     <th>职务</th>
@@ -238,7 +317,16 @@ export default function EmployeesPage() {
                 </thead>
                 <tbody>
                   {filtered.map((e) => (
-                    <tr key={e.id}>
+                    <tr key={e.id} className={selected.has(e.id) ? "bg-brand-50/40" : undefined}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          className="h-3.5 w-3.5 cursor-pointer accent-brand-600"
+                          checked={selected.has(e.id)}
+                          onChange={() => toggleSelect(e.id)}
+                          aria-label={`选择 ${e.name}`}
+                        />
+                      </td>
                       <td>
                         <div className="font-medium text-slate-800">{e.name}</div>
                         <div className="text-[10px] text-slate-400">{e.employee_no || "—"}</div>
@@ -417,6 +505,53 @@ export default function EmployeesPage() {
             </div>
           </div>
         ) : null}
+      </Modal>
+
+      {/* 批量停用 / 批量删除 */}
+      <Modal
+        open={batchMode !== null}
+        onClose={() => {
+          if (!batchRunning) setBatchMode(null);
+        }}
+        width="max-w-lg"
+        title={batchMode === "purge" ? "确认批量删除员工" : "确认批量停用员工"}
+        footer={
+          <>
+            <button className="btn" disabled={batchRunning} onClick={() => setBatchMode(null)}>
+              取消
+            </button>
+            <button
+              className={`btn ${batchMode === "purge" ? "btn-danger" : "btn-primary"}`}
+              disabled={batchRunning || selected.size === 0}
+              onClick={runBatch}
+            >
+              {batchRunning ? "处理中…" : batchMode === "purge" ? `确认删除 ${selected.size} 人` : `确认停用 ${selected.size} 人`}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-3 text-[13px]">
+          <p className="text-slate-600">
+            {batchMode === "purge"
+              ? "将永久删除以下员工的档案、岗位资格、请假申请与搭班偏好，此操作不可撤销。"
+              : "以下员工将被置为停用，不再出现在排班候选中；历史排班、请假与偏好全部保留，可随时恢复。"}
+          </p>
+          <div className="max-h-48 overflow-y-auto rounded-lg border border-line bg-slate-50 px-3 py-2">
+            <div className="flex flex-wrap gap-x-3 gap-y-1">
+              {selectedList.map((e) => (
+                <span key={e.id} className="text-[12px] text-slate-700">
+                  {e.name}
+                  {e.employee_no ? <span className="text-[10px] text-slate-400">({e.employee_no})</span> : null}
+                </span>
+              ))}
+            </div>
+          </div>
+          {batchMode === "purge" ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-5 text-amber-800">
+              已有排班记录的员工不会被删除，会自动改为停用并在结果中提示 —— 否则已发布的班表会指向不存在的员工。
+            </div>
+          ) : null}
+        </div>
       </Modal>
 
       {/* 导入 */}

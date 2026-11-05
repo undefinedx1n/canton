@@ -89,14 +89,19 @@ export default function GeneratePage() {
               <input type="date" className="input" value={start} onChange={(e) => setStart(e.target.value)} />
             </div>
             <div>
-              <label className="label">天数（滚动排未来三天）</label>
+              <label className="label">排班窗口</label>
               <select className="input" value={days} onChange={(e) => setDays(Number(e.target.value))}>
-                {[1, 2, 3, 5, 7].map((d) => (
+                {[1, 2, 3, 5, 7, 14, 21, 30].map((d) => (
                   <option key={d} value={d}>
                     {d} 天（{addDays(start, d - 1)} 结束）
                   </option>
                 ))}
               </select>
+              <p className="mt-1 text-[11px] leading-4 text-slate-500">
+                {days >= 14
+                  ? "长窗口让当值、周末与节假日分布更均匀，适合月度排班。"
+                  : "短窗口便于滚动调整，但均衡只能靠跨版本累计，建议月度排一次 30 天。"}
+              </p>
             </div>
             <div>
               <label className="label">缺口处理</label>

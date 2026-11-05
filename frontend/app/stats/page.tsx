@@ -56,6 +56,34 @@ export default function StatsPage() {
   const maxDev = Math.max(1, ...stats.supervisors.map((s) => Math.abs(s.deviation)));
   const employees = [...stats.employees].sort((a, b) => (b.is_supervisor ? 1 : 0) - (a.is_supervisor ? 1 : 0) || b.work_days - a.work_days);
 
+  // 均衡判定：把总数平均分给 N 人时，极差的数学下界是 0（整除）或 1（不整除），
+  // 达到下界即「已均衡」，否则说明还有优化空间。
+  const fairRows = (() => {
+    const n = stats.supervisors.length;
+    if (n < 2) return [];
+    const defs = [
+      { key: "period_duty", label: "总当值", tip: "含工作日与周末" },
+      { key: "period_weekend", label: "周末当值", tip: "周六周日" },
+      { key: "period_holiday", label: "节假日当值", tip: "法定节假日" },
+      { key: "period_peak", label: "旺季当值", tip: "日历标记的高峰日" },
+    ] as const;
+    return defs.map((d) => {
+      const vals = stats.supervisors.map((s) => (s as any)[d.key] as number);
+      const total = vals.reduce((a, b) => a + b, 0);
+      const min = Math.min(...vals);
+      const max = Math.max(...vals);
+      const best = Math.ceil(total / n) - Math.floor(total / n);
+      return {
+        ...d,
+        total,
+        distribution: [...vals].sort((a, b) => a - b).join(" / "),
+        spreadValue: max - min,
+        optimal: best,
+        ok: max - min <= best,
+      };
+    });
+  })();
+
   return (
     <AppShell>
       <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
@@ -223,6 +251,55 @@ export default function StatsPage() {
         </Card>
       ) : (
         <div className="grid gap-3 lg:grid-cols-[1fr_380px]">
+          {fairRows.length ? (
+            <Card pad={false} className="overflow-hidden lg:col-span-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
+                <SectionTitle
+                  title="主管均衡判定"
+                  desc={`按周期 ${stats.period.start} ~ ${stats.period.end} 统计，均摊后理论极差为 0 或 1。`}
+                />
+                <Badge tone={fairRows.every((r) => r.ok) ? "green" : "amber"}>
+                  {fairRows.every((r) => r.ok) ? "全部指标已均衡" : "存在可优化指标"}
+                </Badge>
+              </div>
+              <div className="table-scroll overflow-auto scroll-thin">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>指标</th>
+                      <th className="text-center">合计</th>
+                      <th className="text-center">各人次数（升序）</th>
+                      <th className="text-center">实际极差</th>
+                      <th className="text-center">理论最优</th>
+                      <th className="text-center">判定</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fairRows.map((r) => (
+                      <tr key={r.key}>
+                        <td>
+                          <div className="font-medium text-slate-800">{r.label}</div>
+                          <div className="text-[10px] text-slate-400">{r.tip}</div>
+                        </td>
+                        <td className="text-center tabular-nums">{r.total}</td>
+                        <td className="text-center tabular-nums text-slate-600">{r.distribution || "—"}</td>
+                        <td className="text-center tabular-nums">{r.spreadValue}</td>
+                        <td className="text-center tabular-nums text-slate-400">{r.optimal}</td>
+                        <td className="text-center">
+                          {r.ok ? <Badge tone="green">均衡</Badge> : <Badge tone="amber">差 {r.spreadValue - r.optimal} 次</Badge>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="border-t border-line px-4 py-2 text-[11px] leading-5 text-slate-500">
+                极差 = 最多者 − 最少者。「理论最优」是 {stats.supervisors.length} 人平均分配时的数学下界，
+                例如 {fairRows[0]?.total ?? 0} 次当值分给 {stats.supervisors.length} 人，必然有人多 1 次。
+                判定为「均衡」表示已无进一步压缩空间。
+              </div>
+            </Card>
+          ) : null}
           <Card pad={false} className="overflow-hidden">
             <div className="border-b border-line px-4 py-3">
               <SectionTitle

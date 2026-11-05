@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+import datetime as dt
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import get_current_user, write_audit
-from ..models import Employee, EmployeePositionSkill, EmployeeTypeOption, PairingPreference, Position, User
+from ..models import (
+    AvailabilityRequest,
+    Employee,
+    EmployeePositionSkill,
+    EmployeeTypeOption,
+    PairingPreference,
+    Position,
+    ScheduleAssignment,
+    User,
+)
 from ..schemas import (
     EmployeeIn,
     EmployeeOut,
@@ -117,6 +130,112 @@ def deactivate_employee(employee_id: int, db: Session = Depends(get_db), user: U
     write_audit(db, user.username, "deactivate", "employee", str(emp.id), f"停用员工 {emp.name}")
     db.commit()
     return {"ok": True}
+
+
+# --------------------------- 批量停用 / 批量删除 ----------------------------- #
+class BatchDeleteIn(BaseModel):
+    employee_ids: list[int] = Field(default_factory=list)
+    # deactivate: 仅停用（保留全部历史，可恢复）
+    # purge: 彻底删除（物理删除，仅限从未进入过任何排班版本的员工）
+    mode: str = "deactivate"
+
+
+MAX_BATCH = 500
+
+
+@router.post("/employees/batch-delete")
+def batch_delete_employees(
+    payload: BatchDeleteIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """批量停用或删除员工。
+
+    - `deactivate`：置为停用，历史排班/请假/偏好全部保留，可随时恢复。
+    - `purge`：物理删除。**存在历史排班记录的员工一律拒绝**，否则已发布的班表
+      会指向不存在的员工；这类员工自动降级为「停用」并在结果里说明原因。
+    """
+    ids = sorted({int(i) for i in payload.employee_ids})
+    if not ids:
+        raise HTTPException(400, "请先选择员工")
+    if len(ids) > MAX_BATCH:
+        raise HTTPException(400, f"单次最多处理 {MAX_BATCH} 人，请分批操作")
+    mode = (payload.mode or "deactivate").strip().lower()
+    if mode not in {"deactivate", "purge"}:
+        raise HTTPException(400, "mode 只能是 deactivate 或 purge")
+
+    emps = db.query(Employee).filter(Employee.id.in_(ids)).all()
+    found = {e.id: e for e in emps}
+    skipped: list[dict] = [
+        {"employee_id": i, "name": "", "reason": "员工不存在或已被删除"} for i in ids if i not in found
+    ]
+
+    # 只有真正要物理删除时才查排班引用，避免多做无用的聚合
+    assigned: dict[int, int] = {}
+    if mode == "purge":
+        rows = (
+            db.query(ScheduleAssignment.employee_id, func.count(ScheduleAssignment.id))
+            .filter(ScheduleAssignment.employee_id.in_([e.id for e in emps]))
+            .group_by(ScheduleAssignment.employee_id)
+            .all()
+        )
+        assigned = {eid: cnt for eid, cnt in rows}
+
+    deactivated = 0
+    purged = 0
+    for i in ids:
+        emp = found.get(i)
+        if emp is None:
+            continue
+        if mode == "purge":
+            used = assigned.get(emp.id, 0)
+            if used:
+                # 有排班历史：不物理删除，避免破坏已发布版本的可追溯性
+                emp.is_active = False
+                deactivated += 1
+                skipped.append(
+                    {
+                        "employee_id": emp.id,
+                        "name": emp.name,
+                        "reason": f"已有 {used} 条排班记录，为保留班表可追溯性改为停用",
+                    }
+                )
+                continue
+            # 手动清理关联，SQLite 默认不启用外键级联，不能只依赖 ondelete=CASCADE
+            db.query(EmployeePositionSkill).filter(EmployeePositionSkill.employee_id == emp.id).delete(synchronize_session=False)
+            db.query(AvailabilityRequest).filter(AvailabilityRequest.employee_id == emp.id).delete(synchronize_session=False)
+            db.query(PairingPreference).filter(
+                (PairingPreference.employee_a_id == emp.id) | (PairingPreference.employee_b_id == emp.id)
+            ).delete(synchronize_session=False)
+            db.delete(emp)
+            purged += 1
+        else:
+            if not emp.is_active:
+                skipped.append({"employee_id": emp.id, "name": emp.name, "reason": "已是停用状态"})
+                continue
+            emp.is_active = False
+            deactivated += 1
+
+    if deactivated or purged:
+        names = "、".join(found[i].name for i in ids if i in found)[:180]
+        action = "purge" if purged else "deactivate"
+        write_audit(
+            db,
+            user.username,
+            f"batch_{action}",
+            "employee",
+            ",".join(str(i) for i in ids[:50]),
+            f"批量{'删除' if purged else '停用'} {deactivated + purged} 人：{names}",
+        )
+    db.commit()
+    return {
+        "ok": True,
+        "mode": mode,
+        "deactivated": deactivated,
+        "purged": purged,
+        "skipped": skipped,
+    }
+
 
 
 # ------------------------------- 员工类型 ---------------------------------- #

@@ -185,13 +185,16 @@ def _ensure_editable(db: Session, version: ScheduleVersion, user: User) -> tuple
 # --------------------------------------------------------------------------- #
 @router.post("/generate")
 def generate(payload: GenerateRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    if payload.days < 1 or payload.days > 14:
-        raise HTTPException(400, "排班天数需在 1~14 天之间")
+    if payload.days < 1 or payload.days > 31:
+        raise HTTPException(400, "排班天数需在 1~31 天之间（一个自然月内）")
     problem = build_problem(db, payload.start_date, payload.days)
+    # 求解时间随窗口线性放宽：30 天规模实测约 6s，留足余量给人数更多的真实名单，
+    # 上限 90s 避免长时间占用请求；超时也会返回当前最优解而不是失败。
+    budget = min(90.0, max(settings.solver_max_time_seconds, payload.days * 2.5))
     result = solve(
         problem,
         mode=payload.mode,
-        timeout=settings.solver_max_time_seconds,
+        timeout=budget,
         seed=settings.solver_random_seed,
     )
 
@@ -257,7 +260,8 @@ def reoptimize(version_id: int, db: Session = Depends(get_db), user: User = Depe
         raise HTTPException(404, "版本不存在")
     days = (version.end_date - version.start_date).days + 1
     problem = build_problem(db, version.start_date, days)
-    result = solve(problem, mode="draft", timeout=settings.solver_max_time_seconds, seed=settings.solver_random_seed)
+    budget = min(90.0, max(settings.solver_max_time_seconds, days * 2.5))
+    result = solve(problem, mode="draft", timeout=budget, seed=settings.solver_random_seed)
     target, forked = _ensure_editable(db, version, user)
     db.query(ScheduleAssignment).filter(ScheduleAssignment.version_id == target.id).delete()
     db.flush()
