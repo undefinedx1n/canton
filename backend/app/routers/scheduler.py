@@ -309,15 +309,26 @@ def get_version(version_id: int, db: Session = Depends(get_db)):
 
 @router.get("/current")
 def get_current(start: dt.date | None = None, db: Session = Depends(get_db)):
-    start = start or dt.date.today()
-    version = _latest_draft(db, start)
+    anchor = start or dt.date.today()
+    version = _latest_draft(db, anchor)
     if not version:
         version = (
             db.query(ScheduleVersion)
-            .filter(ScheduleVersion.start_date <= start, ScheduleVersion.end_date >= start)
+            .filter(ScheduleVersion.start_date <= anchor, ScheduleVersion.end_date >= anchor)
             .order_by(ScheduleVersion.id.desc())
             .first()
         )
+    if not version and start is None:
+        # 当天没有班表时回退到最近的未来班表：排班通常提前一天生成并发布
+        version = (
+            db.query(ScheduleVersion)
+            .filter(ScheduleVersion.start_date > anchor)
+            .order_by(ScheduleVersion.start_date.asc(), ScheduleVersion.id.desc())
+            .first()
+        )
+    if not version and start is None:
+        # 仍没有则展示最近一期历史班表，避免首页空白
+        version = db.query(ScheduleVersion).order_by(ScheduleVersion.end_date.desc(), ScheduleVersion.id.desc()).first()
     if not version:
         raise HTTPException(404, "暂无排班版本，请先生成预排班")
     return _version_detail(db, version)
