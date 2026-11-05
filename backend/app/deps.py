@@ -35,15 +35,49 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+# AuditLog 里除 summary 外的字符串列都是 VARCHAR(64)。SQLite 不校验长度，
+# PostgreSQL 会直接报 StringDataRightTruncation，导致整个事务回滚（线上 500）。
+AUDIT_CODE_WIDTH = 64
+
+
+def clip_code(value: object, width: int = AUDIT_CODE_WIDTH) -> str:
+    """把审计用短字段裁到列宽以内，超长时保留尾部省略号。"""
+    text = "" if value is None else str(value)
+    if len(text) <= width:
+        return text
+    return text[: width - 1] + "…"
+
+
+def pack_ids(ids: list[int], width: int = AUDIT_CODE_WIDTH) -> str:
+    """把 ID 列表压成不超过列宽的字符串，如 ``11,9,7…(+24)``。
+
+    批量操作的 ID 列表很容易超过 64 字符，直接拼接会让写审计时事务失败；
+    这里优先保留前面的 ID，放不下时用省略号 + 剩余数量收尾。
+    """
+    values = [str(i) for i in ids]
+    joined = ",".join(values)
+    if len(joined) <= width:
+        return joined
+
+    reserve = len(f"…(+{len(values)})")
+    kept: list[str] = []
+    for value in values:
+        candidate = ",".join(kept + [value])
+        if len(candidate) + reserve > width:
+            break
+        kept.append(value)
+    return ",".join(kept) + f"…(+{len(values) - len(kept)})"
+
+
 def write_audit(db: Session, actor: str, action: str, entity: str, entity_id: str, summary: str, before=None, after=None) -> None:
     from .models import AuditLog
 
     db.add(
         AuditLog(
-            actor=actor,
-            action=action,
-            entity=entity,
-            entity_id=str(entity_id),
+            actor=clip_code(actor),
+            action=clip_code(action),
+            entity=clip_code(entity),
+            entity_id=clip_code(entity_id),
             summary=summary,
             before=before,
             after=after,

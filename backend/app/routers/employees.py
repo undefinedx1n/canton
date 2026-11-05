@@ -8,7 +8,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import get_current_user, write_audit
+from ..deps import get_current_user, pack_ids, write_audit
 from ..models import (
     AvailabilityRequest,
     Employee,
@@ -230,7 +230,7 @@ def batch_delete_employees(
             user.username,
             f"batch_{action}",
             "employee",
-            ",".join(str(i) for i in ids[:50]),
+            pack_ids([i for i in ids if i in found]),
             f"批量{'删除' if purged else '停用'} {deactivated + purged} 人：{names}",
         )
     db.commit()

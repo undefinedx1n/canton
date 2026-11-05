@@ -77,10 +77,11 @@ export async function api<T = any>(path: string, options: RequestInit = {}): Pro
     } catch {
       detail = null;
     }
+    const fallback = res.status >= 500 ? `服务端异常（${res.status}），本次操作未生效，请重试` : `请求失败（${res.status}）`;
     const msg =
       typeof detail?.detail === "string"
         ? detail.detail
-        : detail?.detail?.message || `请求失败（${res.status}）`;
+        : detail?.detail?.message || fallback;
     throw new ApiError(res.status, msg, detail?.detail ?? detail);
   }
   if (res.status === 204) return null as T;
