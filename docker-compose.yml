@@ -46,8 +46,11 @@ services:
         max-size: "10m"
         max-file: "5"
 
+  # 有独立域名 + 空闲 80/443 时启用：docker compose --profile tls up -d
+  # 若服务器已运行 nginx（复用 80 端口反代），保持默认关闭，见 deploy/nginx-ip.conf
   caddy:
     image: caddy:2-alpine
+    profiles: ["tls"]
     restart: unless-stopped
     ports:
       - "80:80"
