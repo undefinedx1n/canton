@@ -8,7 +8,7 @@ import { useEffect } from "react";
 export default function LoginPage() {
   const router = useRouter();
   const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin123456");
+  const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -73,6 +73,8 @@ export default function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
+                required
+                autoFocus
               />
             </div>
             {err ? <div className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-600">{err}</div> : null}
@@ -81,9 +83,9 @@ export default function LoginPage() {
             </button>
           </form>
           <div className="mt-6 rounded-lg border border-dashed border-line bg-slate-50 px-3 py-2.5 text-[11px] leading-5 text-slate-500">
-            演示账号：<b>admin / admin123456</b>（管理员）、<b>supervisor / supervisor123</b>（主管）
+            忘记密码请联系系统管理员重置。
             <br />
-            生产部署请通过 .env 修改默认密码并启用 HTTPS。
+            首次登录后请到「系统配置 → 账号与安全」修改初始密码。
           </div>
         </div>
       </div>

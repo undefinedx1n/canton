@@ -53,11 +53,22 @@ export async function api<T = any>(path: string, options: RequestInit = {}): Pro
 
   const res = await fetch(`${apiBase()}${path}`, { ...options, headers, cache: "no-store" });
   if (res.status === 401) {
+    let body: any = null;
+    try {
+      body = await res.json();
+    } catch {
+      body = null;
+    }
+    const serverMsg = typeof body?.detail === "string" ? body.detail : "";
+    // 登录接口的 401 是「账号或密码不对」，不是会话过期，必须原样告诉用户
+    if (path.endsWith("/auth/login")) {
+      throw new ApiError(401, serverMsg || "用户名或密码不正确", body?.detail ?? null);
+    }
     clearSession();
     if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
       window.location.href = "/login/";
     }
-    throw new ApiError(401, "登录已过期，请重新登录", null);
+    throw new ApiError(401, token ? "登录已过期，请重新登录" : "请先登录", body?.detail ?? null);
   }
   if (!res.ok) {
     let detail: any = null;
