@@ -12,14 +12,16 @@
 
 ---
 
-## 0. 线上环境（第一版 v1.0.4）
+## 0. 线上环境（v1.1.0）
 
 | 项 | 值 |
 |---|---|
-| 访问地址 | http://8.217.198.163/ （HTTP，暂无域名与证书） |
+| 访问地址 | **https://canton.1gavin.online/** （Let's Encrypt 证书，HTTP 自动跳转 HTTPS） |
+| 备用入口 | http://8.217.198.163/ （IP 直连，仅供运维排查） |
 | 代码仓库 | https://github.com/undefinedx1n/canton |
-| 管理员账号 | `admin`，初始密码见服务器 `/root/.scheduler-admin-pwd`（随机生成，请及时更换） |
-| 部署架构 | 宿主机 nginx :80 → `127.0.0.1:8000`（FastAPI + 静态前端）→ PostgreSQL 16 容器 |
+| 管理员账号 | `admin`，初始密码见服务器 `/root/.scheduler-admin-pwd`（随机生成，登录后请到「系统配置 → 账号与安全」更换） |
+| 部署架构 | 宿主机 nginx :80/:443 → `127.0.0.1:8000`（FastAPI + 静态前端）→ PostgreSQL 16 容器 |
+| 证书续期 | `certbot-renew.timer` 每日检查，续期后自动 reload nginx |
 | 部署记录 | [docs/RELEASE-v1.0.md](docs/RELEASE-v1.0.md) |
 | 运维手册 | [docs/DEPLOY.md](docs/DEPLOY.md) |
 

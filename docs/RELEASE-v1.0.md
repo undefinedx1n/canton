@@ -1,4 +1,4 @@
-# 第一版上线记录（v1.0.5）
+# 上线记录（v1.1.0）
 
 > 本文件记录首次部署到生产服务器的实际环境、步骤与验收结果，便于复现与回滚。
 > 不含任何密码、密钥等敏感信息（均在服务器 `/srv/park-scheduling/.env` 与 `/root/.scheduler-admin-pwd`，权限 600）。
@@ -7,10 +7,12 @@
 
 | 项 | 值 |
 |---|---|
-| 版本号 | v1.0.5 |
+| 版本号 | v1.1.0 |
 | 首次上线时间 | 2026-11-05 18:28 (UTC+8) |
+| 域名上线时间 | 2026-11-05 18:45 (UTC+8) |
 | 代码来源 | 本地 Git 仓库 `main` 分支，发布包 `git archive` 导出 |
-| 仓库 | https://github.com/undefinedx1n/canton（公开，main + v1.0.0～v1.0.5 标签） |
+| 访问域名 | https://canton.1gavin.online/（Let's Encrypt，有效期至 2027-02-03，自动续期） |
+| 仓库 | https://github.com/undefinedx1n/canton（公开，main + v1.0.0～v1.1.0 标签） |
 | 数据库 | PostgreSQL 16（Docker 卷 `park-scheduling_pgdata`） |
 | 求解器 | OR-Tools CP-SAT 9.12 |
 
@@ -27,7 +29,9 @@
 ## 3. 部署架构
 
 ```
-公网 :80  ->  nginx (conf.d/scheduler.conf, server_name 8.217.198.163)
+公网 :443 ->  nginx (conf.d/scheduler.conf, server_name canton.1gavin.online)
+公网 :80  ->  nginx (301 跳转至 https，仅保留 ACME 校验目录)
+公网 :80  ->  nginx (server_name 8.217.198.163，IP 直连备用入口)
                  └─> 127.0.0.1:8000  api 容器 (FastAPI + 静态前端)
                         └─> db 容器 postgres:16-alpine (仅容器网络, 不暴露公网)
 ```
@@ -87,8 +91,33 @@ nginx 配置备份位于 `/root/nginx-backup-20261105-180326/`。
 
 ## 7. 已知限制与后续建议
 
-1. **没有 HTTPS**：当前按 IP + HTTP 访问，登录口令在公网明文传输。建议尽快绑定域名并启用证书（`deploy/Caddyfile` + `--profile tls`，或在 nginx 加 443 server 块）。
+1. ~~**没有 HTTPS**~~：已解决（v1.1.0 绑定 canton.1gavin.online，Let's Encrypt 证书 + HTTP 全量跳转 + HSTS）。
 2. **管理员初始密码**：随机生成，存放在服务器 `/root/.scheduler-admin-pwd`。上线当版已补「系统配置 → 账号与安全」在线改密入口（v1.0.5），登录后请立即更换。
 3. **备份未配置定时任务**：`scripts/backup.sh` 已就绪，需在服务器 `crontab` 添加上午 02:30 的每日备份（见 DEPLOY.md 第 4 节）。
 4. **单机单副本**：2 vCPU / 1.8 GiB，求解 3 天班表约 95 ms；若扩展到 14 天 + 全量员工，建议观察 `schedule_runs.duration_ms` 并调大 `SOLVER_MAX_TIME_SECONDS`。
 5. **真实数据未导入**：上线后需在「员工档案」下载模板、导入真实名单，再核对「每日需求」，才能生成正式班表。
+
+## 8. v1.1.0 变更：绑定域名与 HTTPS（2026-11-05 18:45）
+
+| 项 | 内容 |
+|---|---|
+| 域名 | `canton.1gavin.online` → A 记录 `8.217.198.163`（阿里/谷歌公共 DNS 双端确认） |
+| 证书 | Let's Encrypt，`certbot certonly --webroot -w /var/www/letsencrypt`，有效期至 2027-02-03 |
+| 续期 | `certbot-renew.timer`（每日 00:10）+ `renewal-hooks/deploy/reload-nginx.sh` 自动 reload |
+| 配置 | `deploy/nginx-scheduler.conf`（443 反代 + 80 跳转 + IP 直连入口），已与服务器 `/etc/nginx/conf.d/scheduler.conf` 一致 |
+| 备份额 | nginx 配置备份 `/root/nginx-backup-20261105-184125/` |
+
+验收（公网侧实测）：
+
+- `https://canton.1gavin.online/` → 200，证书链校验通过（`ssl_verify_result=0`），SAN 匹配
+- `http://canton.1gavin.online/` → 301 → `https://canton.1gavin.online/`
+- `POST /api/auth/login` → 200；HSTS、gzip 均生效
+- 同机 `api.1gavin.online` 站点未受影响（仍是原证书、原配置）
+- Chrome 真实域名渲染 10 个页面，横向溢出 0 px，无证书告警
+- `certbot renew --cert-name canton.1gavin.online --dry-run` 通过
+
+踩坑记录：
+
+1. 首次安装含 443 段的配置时 `nginx: [emerg] no "ssl_certificate" is defined` —— 证书签发前只能装 80 段（引导配置），签完再装完整配置。
+2. `duplicate listen options for [::]:443` —— 同机既有站点已声明 `ipv6only=on`，IPv6 段不可重复声明。
+3. `protocol options redefined` —— 同一 socket 上 HTTP/2 声明不一致；最终 IPv4 开 `http2`、IPv6 与既有站点保持一致，零告警。

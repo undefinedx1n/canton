@@ -64,15 +64,51 @@ docker compose up -d db api          # 只启动数据库与 api，端口仅绑 
 # 2) 初始化基础数据（幂等，只建岗位/需求模板/运营角色/日历，不建示例员工）
 docker compose exec -T api python /app/scripts/init_base.py
 
-# 3) 用宿主机 nginx 反代（server_name 改为真实公网 IP；有域名时加进同一行即可）
-sudo cp deploy/nginx-ip.conf /etc/nginx/conf.d/scheduler.conf
+# 3) 用宿主机 nginx 反代（server_name 改为真实公网 IP）
+sudo cp deploy/nginx-scheduler.conf /etc/nginx/conf.d/scheduler.conf
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
 校验：`curl -s http://<公网IP>/api/health`。改动 nginx 前先备份 `/etc/nginx/conf.d`。
 
-> 有域名后建议切回 Caddy：修改 `deploy/Caddyfile` 的域名，执行 `docker compose --profile tls up -d caddy`，
-> 同时停用本节的 nginx 站点配置，由 Caddy 自动申请证书并处理 HTTP→HTTPS 跳转。
+### 2.2 绑定域名 + HTTPS（当前生产做法）
+
+生产环境已绑定 `canton.1gavin.online`，证书由 Let's Encrypt 签发（certbot webroot 方式，
+不复用 `--nginx` 插件，避免改动同机其他站点）。`deploy/nginx-scheduler.conf` 即线上配置：
+域名 80 → 301 跳 HTTPS，443 反代 `127.0.0.1:8000`，另保留 IP 直连入口便于运维排查。
+
+首次签发（证书不存在时先只装 80 段，见 `deploy/nginx-scheduler.conf` 注释）
+
+```bash
+# 1) 准备 ACME 校验目录并放行 80
+sudo mkdir -p /var/www/letsencrypt
+
+# 2) 签发证书
+sudo certbot certonly --webroot -w /var/www/letsencrypt \
+     -d canton.1gavin.online --non-interactive --agree-tos
+
+# 3) 安装完整配置（含 443），先测再 reload
+sudo cp deploy/nginx-scheduler.conf /etc/nginx/conf.d/scheduler.conf
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+续期：`certbot-renew.timer` 每日检查，续期后由
+`/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh` 自动 `reload nginx`。
+验证续期链路：
+
+```bash
+sudo certbot renew --cert-name canton.1gavin.online --dry-run
+```
+
+常见坑：
+
+- **`duplicate listen options for [::]:443`**：同机已有站点声明了 `ipv6only=on`，本机 IPv6 段不能再重复声明，
+  配置里 IPv6 只写 `listen [::]:443 ssl;`。
+- **`protocol options redefined`**：同一 socket 上 HTTP/2 声明不一致，保持与既有站点一致或只在 IPv4 开 `http2`。
+- 域名解析改到本机后，若本机浏览器走代理/DNS 被劫持，可用
+  `HOST_RESOLVER="MAP canton.1gavin.online <IP>"` 跑 `frontend/ui-audit.mjs` 验证，或 `curl --resolve`。
+
+> 如后续改用 Caddy（`docker compose --profile tls up -d caddy`），需停用本节 nginx 站点，避免抢 80/443。
 
 
 ## 3. 初始化业务数据

@@ -30,10 +30,17 @@ const VIEWPORTS = {
 
 const targets = mode === "all" ? ["mobile", "tablet", "desktop"] : [mode];
 
+const extraArgs = [];
+// 本机 DNS 走代理时域名可能解析到假 IP，可用 HOST_RESOLVER 指定真实 IP
+// 用法：HOST_RESOLVER="MAP canton.1gavin.online 8.217.198.163" node ui-audit.mjs desktop
+if (process.env.HOST_RESOLVER) {
+  extraArgs.push(`--host-resolver-rules=${process.env.HOST_RESOLVER}`);
+}
+
 const browser = await chromium.launch({
   executablePath: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   headless: true,
-  args: ["--no-sandbox", "--disable-gpu"],
+  args: ["--no-sandbox", "--disable-gpu", ...extraArgs],
 });
 
 const report = [];
