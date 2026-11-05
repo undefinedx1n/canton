@@ -1,0 +1,31 @@
+# 生产：把 schedule.example.com 换成你的真实域名（需先解析到本机公网 IP）
+schedule.example.com {
+	encode zstd gzip
+
+	# 安全响应头
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Excel 导入需要较大请求体
+	request_body {
+		max_size 20MB
+	}
+
+	reverse_proxy api:8000 {
+		header_up X-Real-IP {remote_host}
+		health_uri /api/health
+		health_interval 30s
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+	}
+}

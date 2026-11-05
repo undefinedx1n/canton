@@ -1,0 +1,66 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-schedule}
+      POSTGRES_USER: ${POSTGRES_USER:-schedule}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-schedule_dev_pwd}
+      TZ: Asia/Shanghai
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-schedule} -d ${POSTGRES_DB:-schedule}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # 数据库不暴露公网，仅容器内网访问
+    expose:
+      - "5432"
+
+  api:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_API_BASE: ""
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-schedule}:${POSTGRES_PASSWORD:-schedule_dev_pwd}@db:5432/${POSTGRES_DB:-schedule}
+      SCHEDULE_DATA_DIR: /app/data
+      JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-720}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-admin123456}
+      SOLVER_MAX_TIME_SECONDS: ${SOLVER_MAX_TIME_SECONDS:-20}
+      TZ: Asia/Shanghai
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - appdata:/app/data
+    ports:
+      - "127.0.0.1:8000:8000"   # 仅本机可达，由 Caddy 反代
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  appdata:
+  caddy_data:
+  caddy_config:

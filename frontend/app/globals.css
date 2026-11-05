@@ -1,0 +1,169 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --line: #e5e9f0;
+  --ink: #0f172a;
+  --muted: #64748b;
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  font-size: 14px;
+}
+
+::selection {
+  background: #d9ecff;
+}
+
+@layer components {
+  .card {
+    @apply bg-white border border-line rounded-xl shadow-card;
+  }
+  .card-pad {
+    @apply p-4 sm:p-5;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-line bg-white px-3 py-1.5 text-[13px] font-medium text-slate-700 transition
+      hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply border-brand-600 bg-brand-600 text-white hover:bg-brand-700 hover:border-brand-700;
+  }
+  .btn-danger {
+    @apply border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100;
+  }
+  .btn-ghost {
+    @apply border-transparent bg-transparent hover:bg-slate-100;
+  }
+  .btn-sm {
+    @apply px-2 py-1 text-xs;
+  }
+  .input {
+    @apply w-full rounded-lg border border-line bg-white px-2.5 py-1.5 text-[13px] text-slate-800 outline-none transition
+      placeholder:text-slate-400 focus:border-brand-400 focus:ring-2 focus:ring-brand-100;
+  }
+  .label {
+    @apply mb-1 block text-xs font-medium text-slate-500;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium leading-4;
+  }
+  .table {
+    @apply w-full border-collapse text-[13px];
+  }
+  .table th {
+    @apply sticky top-0 z-10 whitespace-nowrap border-b border-line bg-slate-50 px-3 py-2 text-left text-[12px] font-semibold text-slate-500;
+  }
+  .table td {
+    @apply border-b border-slate-100 px-3 py-2 align-middle;
+  }
+  .table tbody tr:hover {
+    @apply bg-slate-50/60;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium;
+  }
+  .nav-item {
+    @apply flex items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-slate-600 transition hover:bg-slate-100 hover:text-slate-900;
+  }
+  .nav-item-active {
+    @apply bg-brand-50 font-semibold text-brand-700 hover:bg-brand-50 hover:text-brand-700;
+  }
+}
+
+.scroll-thin::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ------------------------- 移动端表格与触控适配 -------------------------- */
+/* 表格横向滚动容器：小屏时撑满卡片宽度，避免被 overflow-hidden 裁切且无法滑动 */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  /* 仅当内容可横向滚动时，左右两侧出现阴影，提示"还能滑" */
+  background:
+    linear-gradient(to right, #fff 30%, rgba(255, 255, 255, 0)) left center,
+    linear-gradient(to left, #fff 30%, rgba(255, 255, 255, 0)) right center,
+    radial-gradient(farthest-side at 0 50%, rgba(15, 23, 42, 0.14), transparent) left center,
+    radial-gradient(farthest-side at 100% 50%, rgba(15, 23, 42, 0.14), transparent) right center;
+  background-repeat: no-repeat;
+  background-size: 32px 100%, 32px 100%, 14px 100%, 14px 100%;
+  background-attachment: local, local, scroll, scroll;
+}
+.table-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+.table-scroll::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+
+/* 首列冻结：横向滑动时保留员工/岗位上下文 */
+.col-pin {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #fff;
+  box-shadow: 1px 0 0 var(--line);
+}
+th.col-pin {
+  z-index: 12;
+  background: #f8fafc;
+}
+
+/* 人工调整页的日期列宽（桌面 150px，手机在下方媒体查询中收窄） */
+.day-col {
+  min-width: 150px;
+}
+
+@media (max-width: 640px) {
+  /* 触控场景下压缩单元格内边距，保证一屏可读列更多 */
+  .table th,
+  .table td {
+    padding-left: 8px;
+    padding-right: 8px;
+    padding-top: 7px;
+    padding-bottom: 7px;
+  }
+  .card-pad {
+    padding: 12px;
+  }
+  /* 移动端表单控件不小于 32px 高，便于点选 */
+  .btn,
+  .input {
+    min-height: 32px;
+  }
+  .btn-sm {
+    min-height: 28px;
+  }
+  /* 人工调整页：三天列在手机上收窄，减少横向滑动距离 */
+  .day-col {
+    min-width: 116px !important;
+  }
+  /* 小屏下多列表格改为横向滚动，而不是把每列挤成不可读；
+     .table-compact 用于已裁剪冗余列、能在一屏内放下的表格 */
+  .table-scroll > table:not(.table-compact) {
+    min-width: 680px;
+  }
+}
+

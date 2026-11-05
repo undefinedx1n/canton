@@ -1,0 +1,92 @@
+[
+  {
+    "viewport": "tablet",
+    "page": "overview",
+    "overflow": 0,
+    "bad": [],
+    "clipped": [],
+    "vw": 820,
+    "errors": 0
+  },
+  {
+    "viewport": "tablet",
+    "page": "generate",
+    "overflow": 0,
+    "bad": [],
+    "clipped": [],
+    "vw": 820,
+    "errors": 0
+  },
+  {
+    "viewport": "tablet",
+    "page": "edit",
+    "overflow": 0,
+    "bad": [],
+    "clipped": [],
+    "vw": 820,
+    "errors": 0
+  },
+  {
+    "viewport": "tablet",
+    "page": "employees",
+    "overflow": 0,
+    "bad": [],
+    "clipped": [],
+    "vw": 820,
+    "errors": 0
+  },
+  {
+    "viewport": "tablet",
+    "page": "positions",
+    "overflow": 0,
+    "bad": [],
+    "clipped": [],
+    "vw": 820,
+    "errors": 0
+  },
+  {
+    "viewport": "tablet",
+    "page": "demands",
+    "overflow": 0,
+    "bad": [],
+    "clipped": [],
+    "vw": 820,
+    "errors": 0
+  },
+  {
+    "viewport": "tablet",
+    "page": "requests",
+    "overflow": 0,
+    "bad": [],
+    "clipped": [],
+    "vw": 820,
+    "errors": 0
+  },
+  {
+    "viewport": "tablet",
+    "page": "stats",
+    "overflow": 0,
+    "bad": [],
+    "clipped": [],
+    "vw": 820,
+    "errors": 0
+  },
+  {
+    "viewport": "tablet",
+    "page": "versions",
+    "overflow": 0,
+    "bad": [],
+    "clipped": [],
+    "vw": 820,
+    "errors": 0
+  },
+  {
+    "viewport": "tablet",
+    "page": "settings",
+    "overflow": 0,
+    "bad": [],
+    "clipped": [],
+    "vw": 820,
+    "errors": 0
+  }
+]

@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+backend/**/*.egg-info/
+
+# 前端
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+.next/
+
+# 数据与备份（含真实员工资料的库不入库）
+data/*.db
+data/*.db-wal
+data/*.db-shm
+backups/
+.npm-cache/
+
+# 密钥与本地配置
+.env
+*.local
+
+# 系统
+.DS_Store
+Thumbs.db

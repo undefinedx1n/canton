@@ -1,0 +1,122 @@
+[
+  {
+    "viewport": "mobile",
+    "page": "overview",
+    "overflow": 0,
+    "bad": [],
+    "clipped": [],
+    "vw": 390,
+    "errors": 0
+  },
+  {
+    "viewport": "mobile",
+    "page": "generate",
+    "overflow": 0,
+    "bad": [],
+    "clipped": [],
+    "vw": 390,
+    "errors": 0
+  },
+  {
+    "viewport": "mobile",
+    "page": "edit",
+    "overflow": 0,
+    "bad": [
+      "table.table",
+      "thead.",
+      "tr.",
+      "tbody."
+    ],
+    "clipped": [],
+    "vw": 390,
+    "errors": 0
+  },
+  {
+    "viewport": "mobile",
+    "page": "employees",
+    "overflow": 0,
+    "bad": [
+      "table.table",
+      "thead.",
+      "tr.",
+      "tbody."
+    ],
+    "clipped": [],
+    "vw": 390,
+    "errors": 0
+  },
+  {
+    "viewport": "mobile",
+    "page": "positions",
+    "overflow": 0,
+    "bad": [
+      "table.table",
+      "thead.",
+      "tr.",
+      "tbody."
+    ],
+    "clipped": [],
+    "vw": 390,
+    "errors": 0
+  },
+  {
+    "viewport": "mobile",
+    "page": "demands",
+    "overflow": 0,
+    "bad": [
+      "table.table",
+      "thead.",
+      "tr.",
+      "tbody."
+    ],
+    "clipped": [],
+    "vw": 390,
+    "errors": 0
+  },
+  {
+    "viewport": "mobile",
+    "page": "requests",
+    "overflow": 0,
+    "bad": [
+      "table.table",
+      "thead.",
+      "tr.",
+      "tbody."
+    ],
+    "clipped": [],
+    "vw": 390,
+    "errors": 0
+  },
+  {
+    "viewport": "mobile",
+    "page": "stats",
+    "overflow": 0,
+    "bad": [],
+    "clipped": [],
+    "vw": 390,
+    "errors": 0
+  },
+  {
+    "viewport": "mobile",
+    "page": "versions",
+    "overflow": 0,
+    "bad": [
+      "table.table",
+      "thead.",
+      "tr.",
+      "tbody."
+    ],
+    "clipped": [],
+    "vw": 390,
+    "errors": 0
+  },
+  {
+    "viewport": "mobile",
+    "page": "settings",
+    "overflow": 0,
+    "bad": [],
+    "clipped": [],
+    "vw": 390,
+    "errors": 0
+  }
+]
