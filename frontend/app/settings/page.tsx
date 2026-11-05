@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import AppShell from "@/components/AppShell";
 import { Badge, Card, SectionTitle, Spinner, useToast } from "@/components/ui";
-import { get, put } from "@/lib/api";
+import { get, post, put } from "@/lib/api";
 import type { SettingRow } from "@/lib/types";
 
 const FIELD_LABELS: Record<string, string> = {
@@ -53,6 +53,78 @@ const WEIGHT_LABELS: Record<string, string> = {
   workload_balance: "工作量均衡",
   normal_staff_definition: "",
 };
+
+/** 账号安全：修改当前登录账号的密码（后端 /api/auth/change-password）。 */
+function PasswordCard() {
+  const toast = useToast();
+  const [oldPwd, setOldPwd] = useState("");
+  const [newPwd, setNewPwd] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (newPwd.length < 8) {
+      toast.push("新密码至少 8 位", "error");
+      return;
+    }
+    if (newPwd !== confirm) {
+      toast.push("两次输入的新密码不一致", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      await post(
+        `/api/auth/change-password?old_password=${encodeURIComponent(oldPwd)}&new_password=${encodeURIComponent(newPwd)}`
+      );
+      toast.push("密码已修改，下次登录请使用新密码", "ok");
+      setOldPwd("");
+      setNewPwd("");
+      setConfirm("");
+    } catch (err: any) {
+      toast.push(err?.message || "修改失败", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <SectionTitle title="账号与安全" desc="修改当前登录账号的密码。改动会记入审计日志。" />
+      <form className="grid gap-2 sm:grid-cols-3" onSubmit={submit}>
+        <input
+          className="input"
+          type="password"
+          autoComplete="current-password"
+          placeholder="当前密码"
+          value={oldPwd}
+          onChange={(e) => setOldPwd(e.target.value)}
+        />
+        <input
+          className="input"
+          type="password"
+          autoComplete="new-password"
+          placeholder="新密码（至少 8 位）"
+          value={newPwd}
+          onChange={(e) => setNewPwd(e.target.value)}
+        />
+        <input
+          className="input"
+          type="password"
+          autoComplete="new-password"
+          placeholder="再次输入新密码"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+        />
+        <div className="sm:col-span-3">
+          <button className="btn btn-primary btn-sm" type="submit" disabled={busy || !oldPwd || !newPwd}>
+            {busy ? "提交中…" : "修改密码"}
+          </button>
+        </div>
+      </form>
+    </Card>
+  );
+}
 
 export default function SettingsPage() {
   const toast = useToast();
@@ -114,6 +186,10 @@ export default function SettingsPage() {
         <p className="mt-0.5 text-xs text-slate-500">
           需求文档中标注为「待确认」的业务规则全部做成可调整配置，不写死为不可变规则。修改后重新生成排班即生效。
         </p>
+      </div>
+
+      <div className="mb-3">
+        <PasswordCard />
       </div>
 
       {loading ? (

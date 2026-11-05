@@ -1,4 +1,4 @@
-# 第一版上线记录（v1.0.4）
+# 第一版上线记录（v1.0.5）
 
 > 本文件记录首次部署到生产服务器的实际环境、步骤与验收结果，便于复现与回滚。
 > 不含任何密码、密钥等敏感信息（均在服务器 `/srv/park-scheduling/.env` 与 `/root/.scheduler-admin-pwd`，权限 600）。
@@ -7,8 +7,8 @@
 
 | 项 | 值 |
 |---|---|
-| 版本号 | v1.0.4 |
-| 首次上线时间 | 2026-11-05 18:21 (UTC+8) |
+| 版本号 | v1.0.5 |
+| 首次上线时间 | 2026-11-05 18:28 (UTC+8) |
 | 代码来源 | 本地 Git 仓库 `main` 分支，发布包 `git archive` 导出 |
 | 仓库 | https://github.com/undefinedx1n/canton |
 | 数据库 | PostgreSQL 16（Docker 卷 `park-scheduling_pgdata`） |
@@ -88,13 +88,7 @@ nginx 配置备份位于 `/root/nginx-backup-20261105-180326/`。
 ## 7. 已知限制与后续建议
 
 1. **没有 HTTPS**：当前按 IP + HTTP 访问，登录口令在公网明文传输。建议尽快绑定域名并启用证书（`deploy/Caddyfile` + `--profile tls`，或在 nginx 加 443 server 块）。
-2. **管理员初始密码**：随机生成，存放在服务器 `/root/.scheduler-admin-pwd`。系统暂未提供在线改密入口，如需更换可执行：
-   ```bash
-   docker compose exec -T api python - <<'PY'
-   # 见 backend/app/security.py hash_password
-   PY
-   ```
-   （后续版本应补「修改密码」页面。）
+2. **管理员初始密码**：随机生成，存放在服务器 `/root/.scheduler-admin-pwd`。上线当版已补「系统配置 → 账号与安全」在线改密入口（v1.0.5），登录后请立即更换。
 3. **备份未配置定时任务**：`scripts/backup.sh` 已就绪，需在服务器 `crontab` 添加上午 02:30 的每日备份（见 DEPLOY.md 第 4 节）。
 4. **单机单副本**：2 vCPU / 1.8 GiB，求解 3 天班表约 95 ms；若扩展到 14 天 + 全量员工，建议观察 `schedule_runs.duration_ms` 并调大 `SOLVER_MAX_TIME_SECONDS`。
 5. **真实数据未导入**：上线后需在「员工档案」下载模板、导入真实名单，再核对「每日需求」，才能生成正式班表。
