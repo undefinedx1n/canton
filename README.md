@@ -12,6 +12,21 @@
 
 ---
 
+## 0. 线上环境（第一版 v1.0.4）
+
+| 项 | 值 |
+|---|---|
+| 访问地址 | http://8.217.198.163/ （HTTP，暂无域名与证书） |
+| 代码仓库 | https://github.com/undefinedx1n/canton |
+| 管理员账号 | `admin`，初始密码见服务器 `/root/.scheduler-admin-pwd`（随机生成，请及时更换） |
+| 部署架构 | 宿主机 nginx :80 → `127.0.0.1:8000`（FastAPI + 静态前端）→ PostgreSQL 16 容器 |
+| 部署记录 | [docs/RELEASE-v1.0.md](docs/RELEASE-v1.0.md) |
+| 运维手册 | [docs/DEPLOY.md](docs/DEPLOY.md) |
+
+上线后先在「员工档案」导入真实名单，核对「每日需求」，再执行自动排班。
+
+---
+
 ## 1. 快速开始（Windows，本机已配置完成）
 
 ```bat

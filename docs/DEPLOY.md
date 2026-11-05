@@ -52,6 +52,29 @@ docker compose exec api alembic -c /app/backend/alembic.ini upgrade head
 
 > 后续版本升级：先 `upgrade head` 再滚动重启 api，避免结构与代码不匹配。
 
+### 2.1 无域名场景（IP 直连，复用宿主机已有 nginx）
+
+服务器上 80/443 已被其他站点（nginx）占用、且暂时没有可解析域名时：
+
+```bash
+# 1) 不让 Caddy 抢占端口：compose 里 caddy 已设置 profiles: ["tls"]，默认不启动
+docker compose build api
+docker compose up -d db api          # 只启动数据库与 api，端口仅绑 127.0.0.1:8000
+
+# 2) 初始化基础数据（幂等，只建岗位/需求模板/运营角色/日历，不建示例员工）
+docker compose exec -T api python /app/scripts/init_base.py
+
+# 3) 用宿主机 nginx 反代（server_name 改为真实公网 IP；有域名时加进同一行即可）
+sudo cp deploy/nginx-ip.conf /etc/nginx/conf.d/scheduler.conf
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+校验：`curl -s http://<公网IP>/api/health`。改动 nginx 前先备份 `/etc/nginx/conf.d`。
+
+> 有域名后建议切回 Caddy：修改 `deploy/Caddyfile` 的域名，执行 `docker compose --profile tls up -d caddy`，
+> 同时停用本节的 nginx 站点配置，由 Caddy 自动申请证书并处理 HTTP→HTTPS 跳转。
+
+
 ## 3. 初始化业务数据
 
 1. 浏览器登录 → 「员工档案」→ 下载模板 → 填写真实名单 → **导入预览** → 确认导入。
