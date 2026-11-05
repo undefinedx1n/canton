@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import AppShell from "@/components/AppShell";
 import { Badge, Card, EmptyState, Modal, SectionTitle, Spinner, StatusBadge, useToast } from "@/components/ui";
-import { TYPE_LABEL, ROLE_LABEL, del, get, patch, post, todayISO, weekdayCN, fmtDate } from "@/lib/api";
+import { TYPE_LABEL, ROLE_LABEL, del, get, patch, post, weekdayCN, fmtDate } from "@/lib/api";
 import type { CoverageRow, Employee, Position, VersionDetail, Violation } from "@/lib/types";
 
 type Cell = { position: string; role: string | null; locked: boolean };
@@ -32,7 +32,7 @@ function EditInner() {
   const [showOnlyAssigned, setShowOnlyAssigned] = useState(false);
 
   const loadVersion = useCallback(async (id: number | null) => {
-    const url = id ? `/api/schedule/versions/${id}` : `/api/schedule/current?start=${todayISO()}`;
+    const url = id ? `/api/schedule/versions/${id}` : `/api/schedule/current`;
     const v = await get<VersionDetail>(url);
     setVersion(v);
     setVersionId(v.id);

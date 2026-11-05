@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import AppShell from "@/components/AppShell";
 import { Badge, Card, EmptyState, SectionTitle, Spinner, Stat, StatusBadge, useToast } from "@/components/ui";
-import { get, todayISO, fmtDate, weekdayCN, TYPE_LABEL } from "@/lib/api";
+import { get, fmtDate, weekdayCN, TYPE_LABEL } from "@/lib/api";
 import type { VersionDetail, VersionStats } from "@/lib/types";
 
 const TABS = [
@@ -22,7 +22,7 @@ export default function StatsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const v = await get<VersionDetail>(`/api/schedule/current?start=${todayISO()}`);
+      const v = await get<VersionDetail>(`/api/schedule/current`);
       setVersion(v);
       setStats(await get<VersionStats>(`/api/stats/versions/${v.id}`));
     } catch (e: any) {

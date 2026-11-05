@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AppShell from "@/components/AppShell";
 import { Badge, Card, EmptyState, Modal, SectionTitle, Spinner, Stat, StatusBadge, useToast } from "@/components/ui";
-import { get, post, todayISO, weekdayCN, fmtDate, ROLE_LABEL } from "@/lib/api";
+import { get, post, weekdayCN, fmtDate, ROLE_LABEL } from "@/lib/api";
 import { downloadFile } from "@/lib/download";
 import type { VersionDetail, VersionStats } from "@/lib/types";
 
@@ -59,7 +59,7 @@ export default function OverviewPage() {
     setLoading(true);
     setError("");
     try {
-      const v = await get<VersionDetail>(`/api/schedule/current?start=${todayISO()}`);
+      const v = await get<VersionDetail>(`/api/schedule/current`);
       setVersion(v);
       const s = await get<VersionStats>(`/api/stats/versions/${v.id}`);
       setStats(s);
