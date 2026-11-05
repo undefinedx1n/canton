@@ -111,14 +111,29 @@ curl -fsS https://schedule.example.com/api/health
 
 恢复后校验：登录 → 「版本历史」确认最新发布版本、抽查某日排班与统计人数。
 
-## 6. 版本回滚
+## 6. 日常更新与版本回滚
+
+服务器部署目录已接入 Git（`origin` = GitHub 仓库），更新只需一条命令：
+
+```bash
+cd /srv/park-scheduling
+bash scripts/update.sh              # 拉取 main 最新代码 -> 重建镜像 -> 重启 -> 健康检查
+bash scripts/update.sh v1.0.4       # 回滚到指定版本标签（detached 检出新旧代码后重建）
+```
+
+脚本内部会校验 `/api/health` 返回 200，失败时打印最近 40 行容器日志并以非 0 退出。
+
+手动回滚（不使用脚本时）：
 
 ```bash
 git log --oneline -5
 git checkout <上一个可用提交>
-docker compose up -d --build api
+docker compose build api
+docker compose up -d api
 # 若本次升级包含数据库迁移，需评估是否 downgrade；建议升级前先备份
 ```
+
+> 更新前建议先备份（见第 4 节）。`.env`、数据卷、`/root/nginx-backup-*` 不受 Git 操作影响。
 
 ## 7. 日志与监控
 

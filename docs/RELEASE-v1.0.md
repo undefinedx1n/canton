@@ -10,7 +10,7 @@
 | 版本号 | v1.0.5 |
 | 首次上线时间 | 2026-11-05 18:28 (UTC+8) |
 | 代码来源 | 本地 Git 仓库 `main` 分支，发布包 `git archive` 导出 |
-| 仓库 | https://github.com/undefinedx1n/canton |
+| 仓库 | https://github.com/undefinedx1n/canton（公开，main + v1.0.0～v1.0.5 标签） |
 | 数据库 | PostgreSQL 16（Docker 卷 `park-scheduling_pgdata`） |
 | 求解器 | OR-Tools CP-SAT 9.12 |
 
