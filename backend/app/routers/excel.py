@@ -136,7 +136,7 @@ def _write_matrix_sheet(ws, matrix: dict) -> None:
 
     ws.column_dimensions["A"].width = 12
     for j in range(2, 2 + len(days)):
-        ws.column_dimensions[get_column_letter(j)].width = 8.5
+        ws.column_dimensions[get_column_letter(j)].width = 11.5
     ws.freeze_panes = "B3"
     ws.sheet_view.zoomScale = 90
 

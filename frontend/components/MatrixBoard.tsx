@@ -48,7 +48,7 @@ function Cell({ cell, name, date }: { cell: MatrixCell | undefined; name: string
     );
   }
   return (
-    <span title={cellTitle(cell, name, date)} className="text-slate-300">
+    <span title={cellTitle(cell, name, date)} className="text-slate-400">
       V
     </span>
   );
@@ -92,23 +92,29 @@ export default function MatrixBoard({ data }: { data: MatrixData | null }) {
       </div>
 
       <div className="max-h-[72vh] overflow-auto">
-        <table className="min-w-full border-collapse text-[11px]">
+        <table className="w-max border-collapse text-[11px]">
           <thead>
             <tr>
-              <th className="sticky left-0 top-0 z-30 h-[28px] min-w-[92px] border border-slate-200 bg-white px-2 text-left font-semibold text-rose-600">
+              <th className="sticky left-0 top-0 z-30 h-[28px] w-[104px] min-w-[104px] border border-slate-200 bg-white px-2 text-left font-semibold text-rose-600">
                 日期
               </th>
               {data.days.map((d) => (
                 <th
                   key={d.date}
                   title={`${d.date} 星期${weekdayCN(d.date).slice(1)}${d.label ? " · " + d.label : ""}`}
-                  className={`sticky top-0 z-20 h-[28px] min-w-[54px] whitespace-nowrap border border-slate-200 px-1 font-semibold ${
+                  className={`sticky top-0 z-20 h-[28px] w-[76px] min-w-[76px] whitespace-nowrap border border-slate-200 px-1 text-[10px] font-semibold ${
                     d.date === todayISO ? "bg-amber-50 text-rose-600" : "bg-white text-rose-600"
                   }`}
                 >
-                  {d.date.slice(5)}
+                  {d.date}
                 </th>
               ))}
+              <th className="sticky top-0 z-20 h-[28px] w-[46px] min-w-[46px] border border-l-2 border-slate-200 border-l-slate-300 bg-white px-1 text-[10px] font-semibold text-slate-600">
+                上班
+              </th>
+              <th className="sticky top-0 z-20 h-[28px] w-[46px] min-w-[46px] border border-slate-200 bg-white px-1 text-[10px] font-semibold text-slate-500">
+                休息
+              </th>
             </tr>
             <tr>
               <th className="sticky left-0 top-[28px] z-30 h-[24px] border border-slate-200 bg-white px-2 text-left text-[10px] font-medium text-slate-500">
@@ -124,6 +130,12 @@ export default function MatrixBoard({ data }: { data: MatrixData | null }) {
                   星期{weekdayCN(d.date).slice(1)}
                 </th>
               ))}
+              <th className="sticky top-[28px] z-20 h-[24px] border border-l-2 border-slate-200 border-l-slate-300 bg-white px-1 text-[10px] font-normal text-slate-400">
+                天
+              </th>
+              <th className="sticky top-[28px] z-20 h-[24px] border border-slate-200 bg-white px-1 text-[10px] font-normal text-slate-400">
+                天
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -146,11 +158,15 @@ export default function MatrixBoard({ data }: { data: MatrixData | null }) {
                     <Cell cell={r.cells[d.date]} name={r.name} date={d.date} />
                   </td>
                 ))}
+                <td className="border border-l-2 border-slate-200 border-l-slate-300 px-1 py-1 text-center tabular-nums font-medium text-slate-700">
+                  {r.work_days}
+                </td>
+                <td className="border border-slate-200 px-1 py-1 text-center tabular-nums text-slate-500">{r.rest_days}</td>
               </tr>
             ))}
             {!rows.length ? (
               <tr>
-                <td colSpan={data.days.length + 1} className="border border-slate-200 px-3 py-6 text-center text-xs text-slate-400">
+                <td colSpan={data.days.length + 3} className="border border-slate-200 px-3 py-6 text-center text-xs text-slate-400">
                   没有匹配的人员
                 </td>
               </tr>
@@ -166,6 +182,9 @@ export default function MatrixBoard({ data }: { data: MatrixData | null }) {
                   {d.work_count}
                 </td>
               ))}
+              <td colSpan={2} className="border border-l-2 border-slate-200 border-l-slate-300 bg-slate-50 px-1 py-1 text-center tabular-nums text-[10px] font-semibold text-slate-700">
+                共 {data.summary.total_work} 人次
+              </td>
             </tr>
             <tr>
               <td className="sticky left-0 z-10 border border-slate-200 bg-slate-50 px-2 py-1 text-left text-[10px] font-semibold text-slate-500">
@@ -176,6 +195,9 @@ export default function MatrixBoard({ data }: { data: MatrixData | null }) {
                   {d.rest_count}
                 </td>
               ))}
+              <td colSpan={2} className="border border-l-2 border-slate-200 border-l-slate-300 bg-slate-50 px-1 py-1 text-center tabular-nums text-[10px] text-slate-500">
+                共 {data.summary.total_rest} 人次
+              </td>
             </tr>
             {data.summary.total_leave > 0 ? (
               <tr>
@@ -187,6 +209,9 @@ export default function MatrixBoard({ data }: { data: MatrixData | null }) {
                     {d.leave_count || ""}
                   </td>
                 ))}
+                <td colSpan={2} className="border border-l-2 border-slate-200 border-l-slate-300 bg-slate-50 px-1 py-1 text-center tabular-nums text-[10px] text-amber-600">
+                  共 {data.summary.total_leave} 人次
+                </td>
               </tr>
             ) : null}
           </tfoot>
