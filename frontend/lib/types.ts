@@ -292,3 +292,72 @@ export interface DemandTemplate {
   target_count: number;
   min_count: number;
 }
+
+/* --------------------- 人员 × 日期矩阵（对齐线下 Excel） --------------------- */
+export type MatrixCellKind = "work" | "rest" | "leave" | "inactive";
+
+export interface MatrixCell {
+  kind: MatrixCellKind;
+  assignment_id?: number;
+  position_code?: string;
+  position_name?: string;
+  shift?: Shift;
+  role_code?: string | null;
+  role_name?: string;
+  role_color?: string;
+  source?: string;
+  is_locked?: boolean;
+  request_type?: string;
+  reason?: string;
+  range?: string;
+}
+
+export interface MatrixRow {
+  employee_id: number;
+  name: string;
+  employee_no: string;
+  employment_type: string;
+  job_title: string;
+  is_supervisor: boolean;
+  is_mentor: boolean;
+  is_active: boolean;
+  work_days: number;
+  rest_days: number;
+  leave_days: number;
+  early_count: number;
+  late_count: number;
+  duty_count: number;
+  cells: Record<string, MatrixCell>;
+}
+
+export interface MatrixDay {
+  date: string;
+  weekday: string;
+  day_type: string;
+  is_holiday: boolean;
+  is_peak: boolean;
+  label: string;
+  work_count: number;
+  rest_count: number;
+  leave_count: number;
+}
+
+export interface MatrixData {
+  version_id: number;
+  name: string;
+  status: string;
+  start_date: string;
+  end_date: string;
+  days: MatrixDay[];
+  rows: MatrixRow[];
+  summary: {
+    employees: number;
+    supervisors: number;
+    dates: number;
+    total_work: number;
+    total_rest: number;
+    total_leave: number;
+    avg_work_days: number;
+    avg_rest_per_day: number;
+  };
+}

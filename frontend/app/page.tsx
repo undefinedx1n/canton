@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AppShell from "@/components/AppShell";
+import MatrixBoard from "@/components/MatrixBoard";
 import { Badge, Card, EmptyState, Modal, SectionTitle, Spinner, Stat, StatusBadge, useToast } from "@/components/ui";
 import { get, post, weekdayCN, fmtDate, ROLE_LABEL } from "@/lib/api";
 import { downloadFile } from "@/lib/download";
-import type { VersionDetail, VersionStats } from "@/lib/types";
+import type { MatrixData, VersionDetail, VersionStats } from "@/lib/types";
 
 type DayGroup = {
   date: string;
@@ -48,12 +49,31 @@ export default function OverviewPage() {
   const toast = useToast();
   const [version, setVersion] = useState<VersionDetail | null>(null);
   const [stats, setStats] = useState<VersionStats | null>(null);
+  const [matrix, setMatrix] = useState<MatrixData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [publishing, setPublishing] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
   const [note, setNote] = useState("");
   const [conflict, setConflict] = useState<any[] | null>(null);
+  // 默认用「人员表格」，与主管原来的 Excel 一致；选择会记住，也支持 ?view=table 强制指定
+  const [view, setView] = useState<"table" | "cards">("table");
+
+  useEffect(() => {
+    const q = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("view") : null;
+    const saved = typeof window !== "undefined" ? window.localStorage.getItem("ps_schedule_view") : null;
+    const next = q === "cards" || q === "table" ? q : saved === "cards" || saved === "table" ? saved : "table";
+    setView(next as "table" | "cards");
+  }, []);
+
+  function changeView(next: "table" | "cards") {
+    setView(next);
+    try {
+      window.localStorage.setItem("ps_schedule_view", next);
+    } catch {
+      /* 隐私模式下写入失败不影响当前视图 */
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -63,6 +83,12 @@ export default function OverviewPage() {
       setVersion(v);
       const s = await get<VersionStats>(`/api/stats/versions/${v.id}`);
       setStats(s);
+      // 矩阵只用于补充"谁在休息"，失败时不影响主视图
+      try {
+        setMatrix(await get<MatrixData>(`/api/schedule/versions/${v.id}/matrix`));
+      } catch {
+        setMatrix(null);
+      }
     } catch (e: any) {
       setError(e?.message || "加载失败");
     } finally {
@@ -161,6 +187,22 @@ export default function OverviewPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <div className="flex rounded-lg border border-line bg-white p-0.5 text-xs">
+            <button
+              className={`rounded-md px-2.5 py-1 ${view === "table" ? "bg-slate-900 font-medium text-white" : "text-slate-600 hover:text-slate-900"}`}
+              onClick={() => changeView("table")}
+              title="姓名 × 日期，V 表示休息，和原 Excel 一致"
+            >
+              人员表格
+            </button>
+            <button
+              className={`rounded-md px-2.5 py-1 ${view === "cards" ? "bg-slate-900 font-medium text-white" : "text-slate-600 hover:text-slate-900"}`}
+              onClick={() => changeView("cards")}
+              title="按日期分组，看每个岗位排了谁"
+            >
+              岗位卡片
+            </button>
+          </div>
           <Link className="btn" href="/generate/">
             重新生成
           </Link>
@@ -222,6 +264,8 @@ export default function OverviewPage() {
             <span className="chip border-violet-300 bg-violet-50 text-violet-700">辅助主管 A2 / B1</span>
             <span className="chip border-amber-200 bg-amber-50 text-amber-700">其他岗位主管</span>
             <span className="chip border-dashed border-rose-300 bg-rose-50/60 text-rose-500">空缺</span>
+            <span className="chip border-slate-200 bg-slate-50 text-slate-400">V 休息</span>
+            <span className="chip border-amber-200 bg-amber-50 text-amber-600">假 已批准请假</span>
             <span className="ml-auto tabular-nums">
               人工预排 <b className="text-slate-800">{manualCount}</b> 条 · 自动补齐{" "}
               <b className="text-slate-800">{autoCount}</b> 条
@@ -247,6 +291,7 @@ export default function OverviewPage() {
             </Card>
           ) : null}
 
+          {view === "cards" ? (
           <div className="mt-3 grid gap-3 xl:grid-cols-3">
             {groups.map((g) => (
               <Card key={g.date} pad={false} className="overflow-hidden">
@@ -350,9 +395,28 @@ export default function OverviewPage() {
                     );
                   })}
                 </div>
+
+                <div className="border-t border-line px-3 py-2 text-[11px] leading-5 text-slate-500">
+                  {(() => {
+                    const rest = matrix?.rows.filter((r) => r.cells[g.date]?.kind === "rest").map((r) => r.name) ?? [];
+                    const leave = matrix?.rows.filter((r) => r.cells[g.date]?.kind === "leave").map((r) => r.name) ?? [];
+                    return (
+                      <>
+                        <div>
+                          休息 {rest.length} 人
+                          {rest.length ? "：" + rest.slice(0, 10).join("、") + (rest.length > 10 ? ` 等 ${rest.length} 人` : "") : ""}
+                        </div>
+                        {leave.length ? <div className="text-amber-600">请假 {leave.length} 人：{leave.slice(0, 6).join("、")}</div> : null}
+                      </>
+                    );
+                  })()}
+                </div>
               </Card>
             ))}
           </div>
+          ) : version ? (
+            <MatrixBoard data={matrix} />
+          ) : null}
 
           {version && version.violations.length ? (
             <Card className="mt-3">
@@ -375,6 +439,7 @@ export default function OverviewPage() {
               <div>· 同一员工同日即使承担运营角色也只计 1 人；岗位覆盖按岗位名额单独统计。</div>
               <div>· 运营角色（当值/辅助主管）默认视为岗位标记，不额外占用人数名额，可在系统配置中调整。</div>
               <div>· 班次颜色、岗位颜色仅辅助阅读，业务判断以员工资料字段与岗位配置为准。</div>
+              <div>· 人员表格与导出的「人员排班」工作表同构：V=休息、假=已批准请假，可直接贴回原 Excel。</div>
             </div>
           </Card>
         </>

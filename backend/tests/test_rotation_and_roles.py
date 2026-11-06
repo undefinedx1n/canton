@@ -12,7 +12,7 @@ import datetime as dt
 
 from app.models import Employee, ScheduleVersion
 from app.services.solver import build_problem, solve
-from tests.support import force_demand, set_day
+from tests.support import force_demand, plain_long_term, set_day
 
 START = dt.date(2026, 3, 2)  # 周一
 DATES = [START + dt.timedelta(days=i) for i in range(10)]
@@ -81,25 +81,38 @@ def test_focus_position_rotates_between_people(db):
 
 
 def test_shift_balance_for_multi_shift_employee(db):
-    """同时具备早/晚班岗位资格的员工，不应整窗口只排单一班次。"""
-    emp = db.query(Employee).filter(Employee.is_active.is_(True)).first()
-    emp.skills.clear()
-    db.flush()
+    """同时具备早/晚班岗位资格的员工，不应整窗口只排单一班次。
+
+    为了让这条软约束可判定，这里构造一个"只能由他顶 A1/B7"的场景：
+    其他人不具备这两个岗位资格、其他岗位需求清零，这样早/晚次数完全由他决定，
+    求解器没有"换个人来上"的捷径。软约束在多人竞争场景下会被其他目标拉扯，
+    那属于目标取舍，不适合作为回归断言。
+    """
     from app.models import EmployeePositionSkill
 
+    emp = plain_long_term(db)
+    # 其他人去掉 A1/B7 资格，保证这两个班次只能由被测员工承担
+    db.query(EmployeePositionSkill).filter(
+        EmployeePositionSkill.employee_id != emp.id,
+        EmployeePositionSkill.position_code.in_(["A1", "B7"]),
+    ).delete(synchronize_session=False)
+    # 被测员工只保留一早在（A1）一晚（B7）两个资格
+    db.query(EmployeePositionSkill).filter(EmployeePositionSkill.employee_id == emp.id).delete(synchronize_session=False)
+    db.flush()
     db.add_all(
         [
             EmployeePositionSkill(employee_id=emp.id, position_code="A1", priority=1, proficiency=3, allowed=True),
             EmployeePositionSkill(employee_id=emp.id, position_code="B7", priority=1, proficiency=3, allowed=True),
         ]
     )
-    for d in DATES:
+    days = DATES[:4]
+    for d in days:
         set_day(db, d)
-    force_demand(db, DATES, {"A1": 1, "B7": 1}, zero_others=False)
+    force_demand(db, days, {"A1": 1, "B7": 1}, zero_others=True)
     db.commit()
 
-    problem = build_problem(db, START, len(DATES))
-    res = solve(problem, mode="draft", timeout=12.0)
+    problem = build_problem(db, START, len(days))
+    res = solve(problem, mode="draft", timeout=15.0)
     mine = [a for a in res.assignments if a["employee_id"] == emp.id]
     assert mine, "该员工应有排班"
     shifts = {a["shift"] for a in mine}

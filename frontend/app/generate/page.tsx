@@ -160,8 +160,8 @@ export default function GeneratePage() {
                       <Link className="btn btn-sm" href={`/edit/?id=${version.id}`}>
                         人工调整
                       </Link>
-                      <Link className="btn btn-sm btn-primary" href="/">
-                        查看总览
+                      <Link className="btn btn-sm btn-primary" href="/?view=table">
+                        查看人员表格
                       </Link>
                     </div>
                   }

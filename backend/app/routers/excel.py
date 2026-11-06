@@ -15,6 +15,7 @@ from ..db import get_db
 from ..deps import get_current_user, write_audit
 from ..models import Employee, EmployeePositionSkill, EmployeeTypeOption, OperationalRole, Position, ScheduleVersion, User
 from ..schemas import EmployeeIn
+from ..services.matrix import CELL_LEAVE, CELL_REST, CELL_WORK, WEEKDAY_CN, version_matrix
 from ..services.stats import version_stats
 from ..services.validation import validate_assignments
 
@@ -39,6 +40,107 @@ def _style_header(ws, row: int, ncols: int):
         cell.border = BORDER
 
 
+MATRIX_DATE_FONT = Font(bold=True, color="C00000", size=10)
+MATRIX_DUTY_FONT = Font(bold=True, color="C00000", size=10)
+MATRIX_SUPPORT_FONT = Font(bold=True, color="7030A0", size=10)
+MATRIX_NORMAL_FONT = Font(color="1F2937", size=10)
+MATRIX_REST_FONT = Font(color="9CA3AF", size=10)
+MATRIX_LEAVE_FONT = Font(color="B45309", size=10)
+SUPERVISOR_ROW_FILL = PatternFill("solid", fgColor="FCE4D6")
+REST_ROW_FILL = PatternFill("solid", fgColor="F3F4F6")
+
+
+def _write_matrix_sheet(ws, matrix: dict) -> None:
+    """按线下习惯写「姓名 × 日期」表：B2 红、A2/B1 紫、V 表示休息。
+
+    保持与主管原来手工维护的 Excel 完全相同的行列结构，方便直接把导出的表
+    贴回原工作簿，或从原工作簿导入。
+    """
+    days = matrix["days"]
+    people = matrix["rows"]
+
+    ws.cell(row=1, column=1, value="日期").font = MATRIX_DATE_FONT
+    ws.cell(row=2, column=1, value="星期＼姓名").font = Font(bold=True, size=10)
+    for c in (ws.cell(row=1, column=1), ws.cell(row=2, column=1)):
+        c.alignment = CENTER
+        c.border = BORDER
+
+    for j, day in enumerate(days, start=2):
+        c1 = ws.cell(row=1, column=j, value=dt.date.fromisoformat(day["date"]))
+        c1.number_format = "yyyy-mm-dd"
+        c1.font = MATRIX_DATE_FONT
+        c1.alignment = CENTER
+        c1.border = BORDER
+        c2 = ws.cell(row=2, column=j, value=f"星期{WEEKDAY_CN[dt.date.fromisoformat(day['date']).weekday()]}")
+        c2.font = Font(size=9, color="374151")
+        c2.alignment = CENTER
+        c2.border = BORDER
+
+    r = 3
+    for person in people:
+        name_cell = ws.cell(row=r, column=1, value=person["name"])
+        name_cell.font = Font(bold=True, size=10)
+        name_cell.alignment = Alignment(horizontal="left", vertical="center")
+        name_cell.border = BORDER
+        if person["is_supervisor"]:
+            name_cell.fill = SUPERVISOR_ROW_FILL
+
+        for j, day in enumerate(days, start=2):
+            cell_data = person["cells"][day["date"]]
+            cell = ws.cell(row=r, column=j)
+            kind = cell_data["kind"]
+            if kind == CELL_WORK:
+                cell.value = cell_data["position_code"]
+                role = cell_data.get("role_code")
+                if role == "duty_supervisor":
+                    cell.font = MATRIX_DUTY_FONT
+                elif role:
+                    cell.font = MATRIX_SUPPORT_FONT
+                else:
+                    cell.font = MATRIX_NORMAL_FONT
+            elif kind == CELL_LEAVE:
+                cell.value = "假"
+                cell.font = MATRIX_LEAVE_FONT
+                cell.fill = PatternFill("solid", fgColor="FFF7ED")
+            elif kind == CELL_REST:
+                cell.value = "V"
+                cell.font = MATRIX_REST_FONT
+                if person["is_supervisor"]:
+                    cell.fill = SUPERVISOR_ROW_FILL
+            else:
+                cell.value = "-"
+                cell.font = MATRIX_REST_FONT
+                cell.fill = REST_ROW_FILL
+            cell.alignment = CENTER
+            cell.border = BORDER
+        r += 1
+
+    # 每日人数：上班 / 休息，方便主管核对人力
+    r += 1
+    for label, key, font in (("上班人数", "work_count", Font(bold=True, size=9)), ("休息人数", "rest_count", Font(size=9, color="6B7280"))):
+        ws.cell(row=r, column=1, value=label).font = font
+        ws.cell(row=r, column=1).border = BORDER
+        for j, day in enumerate(days, start=2):
+            cell = ws.cell(row=r, column=j, value=day[key])
+            cell.font = font
+            cell.alignment = CENTER
+            cell.border = BORDER
+        r += 1
+
+    note_row = r + 1
+    ws.cell(
+        row=note_row,
+        column=1,
+        value="说明：B2=当值主管（红）；A2/B1=早/晚班辅助主管（紫）；V=休息；假=已批准请假；其余为岗位代码。",
+    ).font = Font(italic=True, color="6B7280", size=9)
+
+    ws.column_dimensions["A"].width = 12
+    for j in range(2, 2 + len(days)):
+        ws.column_dimensions[get_column_letter(j)].width = 8.5
+    ws.freeze_panes = "B3"
+    ws.sheet_view.zoomScale = 90
+
+
 @router.get("/export/versions/{version_id}.xlsx")
 def export_version(version_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     version = db.get(ScheduleVersion, version_id)
@@ -54,8 +156,11 @@ def export_version(version_id: int, db: Session = Depends(get_db), user: User = 
     by_key = {(a.work_date, a.employee_id): a for a in version.assignments}
 
     wb = Workbook()
-    ws = wb.active
-    ws.title = "排班表"
+    ws0 = wb.active
+    ws0.title = "人员排班"
+    _write_matrix_sheet(ws0, version_matrix(db, version))
+
+    ws = wb.create_sheet("排班表")
 
     ws.cell(row=1, column=1, value=f"{version.name}  [{version.status}]")
     ws.cell(row=1, column=1).font = Font(bold=True, size=14)

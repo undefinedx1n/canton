@@ -235,7 +235,7 @@ def test_excel_export_contains_sheets_and_rows(client, window):
     from openpyxl import load_workbook
 
     wb = load_workbook(io.BytesIO(resp.content))
-    assert {"排班表", "岗位覆盖", "每日统计", "员工明细", "主管公平", "版本信息"} <= set(wb.sheetnames)
+    assert {"人员排班", "排班表", "岗位覆盖", "每日统计", "员工明细", "主管公平", "版本信息"} <= set(wb.sheetnames)
 
     ws = wb["排班表"]
     # 排班表是"员工 × 日期"的打印网格：第 4 行为表头，之后每位在职员工一行，末尾附每日汇总

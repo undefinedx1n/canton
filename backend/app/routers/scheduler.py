@@ -311,6 +311,17 @@ def get_version(version_id: int, db: Session = Depends(get_db)):
     return _version_detail(db, version)
 
 
+@router.get("/versions/{version_id}/matrix")
+def get_matrix(version_id: int, db: Session = Depends(get_db)):
+    """人员 × 日期矩阵：姓名 × 日期，V=休息，用于衔接线下 Excel 排班表。"""
+    from ..services.matrix import version_matrix
+
+    version = db.get(ScheduleVersion, version_id)
+    if not version:
+        raise HTTPException(404, "版本不存在")
+    return version_matrix(db, version)
+
+
 @router.get("/current")
 def get_current(start: dt.date | None = None, db: Session = Depends(get_db)):
     anchor = start or dt.date.today()
