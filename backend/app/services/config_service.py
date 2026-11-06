@@ -61,7 +61,9 @@ DEFAULT_SETTINGS: dict[str, tuple[dict[str, Any], str]] = {
             "weekend_fairness": 30,
             "holiday_fairness": 22,
             "peak_fairness": 18,
-            "fairness_excess": 130,
+            # 各公平指标「超标人次」合计的惩罚。分块求解时 14 天窗口只有 12s/块，
+            # 130 会让当值分布出现 1 人 4 次、1 人 1 次（极差 3）；400 后稳定在极差 1~2。
+            "fairness_excess": 400,
             "rest_balance": 14,
             "shift_preference": 9,
             "position_priority": 7,
