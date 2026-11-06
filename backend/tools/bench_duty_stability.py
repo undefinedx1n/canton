@@ -1,4 +1,11 @@
-import datetime as dt, sys, time
+"""30 天窗口当值均衡稳定性自检：同一份数据重复求解，看分布是否抖动。
+
+用法：../.venv/Scripts/python.exe tools/bench_duty_stability.py
+背景：分块求解有时间预算，权重设置不当会出现"跑三次一次均衡两次偏差 2 次"。
+"""
+import datetime as dt
+import sys
+import time
 sys.path.insert(0, '.')
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
