@@ -68,6 +68,8 @@ export default function MatrixBoard({ data }: { data: MatrixData | null }) {
 
   const today = new Date();
   const todayISO = `${today.getFullYear()}-${`${today.getMonth() + 1}`.padStart(2, "0")}-${`${today.getDate()}`.padStart(2, "0")}`;
+  // 窗口较短（≤10 天）时表格会留白，用右侧休息名单补足；长窗口让表格占满宽度
+  const showRestPanel = data.days.length <= 10;
 
   return (
     <Card pad={false} className="mt-3 overflow-hidden">
@@ -91,7 +93,8 @@ export default function MatrixBoard({ data }: { data: MatrixData | null }) {
         </div>
       </div>
 
-      <div className="max-h-[72vh] overflow-auto">
+      <div className="flex flex-col xl:flex-row">
+        <div className="max-h-[72vh] flex-1 overflow-auto">
         <table className="w-max border-collapse text-[11px]">
           <thead>
             <tr>
@@ -216,6 +219,49 @@ export default function MatrixBoard({ data }: { data: MatrixData | null }) {
             ) : null}
           </tfoot>
         </table>
+        </div>
+
+        {showRestPanel ? (
+          <aside className="max-h-[72vh] w-full shrink-0 overflow-auto border-t border-line bg-slate-50/40 px-3 py-2 xl:w-[300px] xl:border-l xl:border-t-0">
+            <div className="mb-2 flex items-baseline justify-between">
+              <div className="text-[12px] font-semibold text-slate-800">每日休息名单</div>
+              <div className="text-[10px] text-slate-400">当日未排班的人</div>
+            </div>
+            <div className="space-y-2">
+              {data.days.map((d) => {
+                const rest = data.rows.filter((r) => r.cells[d.date]?.kind === "rest").map((r) => r.name);
+                const leave = data.rows.filter((r) => r.cells[d.date]?.kind === "leave").map((r) => r.name);
+                return (
+                  <div key={d.date} className="rounded-lg border border-line bg-white px-2.5 py-2">
+                    <div className="flex items-baseline gap-2 text-[11px]">
+                      <b className="tabular-nums text-slate-800">{d.date}</b>
+                      <span className="text-slate-500">星期{weekdayCN(d.date).slice(1)}</span>
+                      <span className="ml-auto text-[10px] text-slate-400">
+                        上班 {d.work_count} · 休息 {d.rest_count}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {rest.length ? (
+                        rest.map((n) => (
+                          <span key={n} className="chip border-slate-200 bg-slate-50 text-slate-500">
+                            {n}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-[10px] text-slate-400">全员上班</span>
+                      )}
+                      {leave.map((n) => (
+                        <span key={n} className="chip border-amber-200 bg-amber-50 text-amber-600">
+                          {n} · 假
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </aside>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line px-3 py-2 text-[10px] text-slate-500">
