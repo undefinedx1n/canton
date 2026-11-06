@@ -403,6 +403,15 @@ export default function EmployeesPage() {
                 <input className="input" value={editing.employee_no || ""} onChange={(e) => setEditing({ ...editing, employee_no: e.target.value || null })} />
               </div>
               <div>
+                <label className="label">钉钉用户ID</label>
+                <input
+                  className="input"
+                  placeholder="导出考勤排班表用"
+                  value={editing.external_user_id || ""}
+                  onChange={(e) => setEditing({ ...editing, external_user_id: e.target.value || null })}
+                />
+              </div>
+              <div>
                 <label className="label">员工类型</label>
                 <select className="input" value={editing.employment_type} onChange={(e) => setEditing({ ...editing, employment_type: e.target.value })}>
                   {types.map((t) => (

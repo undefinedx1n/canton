@@ -11,6 +11,8 @@ export interface Skill {
 export interface Employee {
   id: number;
   employee_no: string | null;
+  /** 钉钉成员ID，仅用于导出考勤排班表 */
+  external_user_id?: string | null;
   name: string;
   employment_type: string;
   job_title: string;
