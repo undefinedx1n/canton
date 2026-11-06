@@ -50,6 +50,9 @@ DEFAULT_SETTINGS: dict[str, tuple[dict[str, Any], str]] = {
         {
             "coverage_target": 60,
             "gap_penalty": 400,
+            # 三个主管角色（B2 当值 / A2 早辅 / B1 晚辅）缺失视为严重违规：
+            # 权重高于普通缺口，保证"能排就一定排"，但仍是软约束以便不可行时降级而不是整体失败
+            "role_gap": 2000,
             "duty_fairness": 45,
             "weekend_fairness": 30,
             "holiday_fairness": 22,
@@ -63,14 +66,37 @@ DEFAULT_SETTINGS: dict[str, tuple[dict[str, Any], str]] = {
             "proficiency": 6,
             "stability": 4,
             "workload_balance": 8,
+            # 岗位轮换：重点岗位连续两天同岗高惩罚；其他岗位默认不做（避免 30 天窗口搜索空间爆炸）
+            "rotation_consecutive_focus": 55,
+            "rotation_consecutive_other": 0,
+            # 重点岗位在周期内的人均承担次数均衡（超出人均上限才罚）
+            "rotation_balance": 70,
+            # 早班辅助 A2 / 晚班辅助 B1 在主管之间的承担次数均衡
+            "support_fairness": 40,
+            # 每人早/晚班次数差
+            "shift_balance": 30,
         },
         "软约束权重（需求文档 17.8 建议默认值）",
+    ),
+    "rotation_rule": (
+        {
+            # 需要"平均轮换、尽量不连续"的重点岗位（销售 A3/B3、摄影 B8、三个主管位）
+            "focus_positions": ["A3", "B3", "B8", "A2", "B1", "B2"],
+            "avoid_consecutive": True,
+            "balance_within_period": True,
+            "note": "重点岗位连续同岗权重 55，其他岗位 6；轮换均衡按公平周期统计",
+        },
+        "岗位轮换规则（销售/摄影重点位与主管位优先均衡）",
     ),
     "department_labels": (
         {"sales": "销售", "photography": "摄影"},
         "部门显示名称",
     ),
     "schedule_window_days": ({"days": 3}, "默认排班窗口长度（天）"),
+    "solve_chunk_days": (
+        {"days": 7, "note": "长窗口（>该天数）按块滚动求解，跨块继承历史与昨日岗位；0 表示一次性求解"},
+        "求解分块长度（天）",
+    ),
 }
 
 

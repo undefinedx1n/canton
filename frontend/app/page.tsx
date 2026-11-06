@@ -23,10 +23,10 @@ type DayGroup = {
     area: string;
     shift: string;
     target: number;
-    assigned: { id: number; name: string; role: string | null; is_supervisor: boolean; locked: boolean; type: string }[];
+    assigned: { id: number; name: string; role: string | null; is_supervisor: boolean; locked: boolean; source: string; type: string }[];
     shortage: number;
   }[];
-  duty: { name: string; role_name: string }[];
+  duty: { name: string; role_code: string | null; role_name: string }[];
 };
 
 const DAYTYPE_TONE: Record<string, any> = {
@@ -94,6 +94,7 @@ export default function OverviewPage() {
               role: a.role_code,
               is_supervisor: a.is_supervisor,
               locked: a.is_locked,
+              source: a.source,
               type: a.employee_type,
             })),
         }));
@@ -107,13 +108,19 @@ export default function OverviewPage() {
         early: d.early_count,
         late: d.late_count,
         positions: rows,
-        duty: d.supervisors_on_duty.map((s) => ({ name: s.name, role_name: ROLE_LABEL[s.role_code] || s.role_name })),
+        duty: d.supervisors_on_duty.map((s: any) => ({
+          name: s.name,
+          role_code: s.role_code,
+          role_name: ROLE_LABEL[s.role_code] || s.role_name,
+        })),
       };
     });
   }, [version, stats]);
 
   const errorCount = version?.violations.filter((v) => v.level === "error").length ?? 0;
   const warnCount = version?.violations.filter((v) => v.level === "warn").length ?? 0;
+  const manualCount = version?.assignments.filter((a) => a.source === "manual").length ?? 0;
+  const autoCount = (version?.assignments.length ?? 0) - manualCount;
 
   async function publish() {
     if (!version) return;
@@ -210,6 +217,17 @@ export default function OverviewPage() {
             />
           </div>
 
+          <Card className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2 text-[11px] text-slate-600">
+            <span className="chip border-rose-300 bg-rose-50 text-rose-700">当值主管 B2</span>
+            <span className="chip border-violet-300 bg-violet-50 text-violet-700">辅助主管 A2 / B1</span>
+            <span className="chip border-amber-200 bg-amber-50 text-amber-700">其他岗位主管</span>
+            <span className="chip border-dashed border-rose-300 bg-rose-50/60 text-rose-500">空缺</span>
+            <span className="ml-auto tabular-nums">
+              人工预排 <b className="text-slate-800">{manualCount}</b> 条 · 自动补齐{" "}
+              <b className="text-slate-800">{autoCount}</b> 条
+            </span>
+          </Card>
+
           {conflict ? (
             <Card className="mt-3 border-rose-200 bg-rose-50/60">
               <SectionTitle
@@ -244,15 +262,29 @@ export default function OverviewPage() {
                       上班 {g.total} 人 · 早 {g.early} / 晚 {g.late}
                     </div>
                   </div>
-                  <div className="text-right text-[11px] text-slate-500">
-                    {g.duty.length ? (
-                      <>
-                        <div className="font-medium text-rose-600">{g.duty[0]?.name}</div>
-                        <div>当值主管</div>
-                      </>
-                    ) : (
-                      <span className="text-rose-500">未指定当值</span>
-                    )}
+                  <div className="text-right text-[11px] leading-5 text-slate-500">
+                    {(() => {
+                      const primary = g.duty.find((x) => x.role_code === "duty_supervisor");
+                      const assists = g.duty.filter((x) => x.role_code && x.role_code !== "duty_supervisor");
+                      return (
+                        <>
+                          {primary ? (
+                            <div className="font-medium text-rose-600">{primary.name} · 当值主管</div>
+                          ) : (
+                            <div className="font-medium text-rose-500">当值主管缺失</div>
+                          )}
+                          {assists.length ? (
+                            assists.map((x) => (
+                              <div key={x.role_code + x.name} className="text-violet-600">
+                                {x.name} · {x.role_name}
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-violet-400">辅助主管缺失</div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -289,19 +321,22 @@ export default function OverviewPage() {
                                     <span
                                       key={a.id}
                                       className={`chip ${
-                                        a.role
+                                        a.role === "duty_supervisor"
                                           ? "border-rose-300 bg-rose-50 text-rose-700"
+                                          : a.role
+                                          ? "border-violet-300 bg-violet-50 text-violet-700"
                                           : a.is_supervisor
                                           ? "border-amber-200 bg-amber-50 text-amber-700"
                                           : shift === "early"
                                           ? "border-blue-200 bg-blue-50/70 text-blue-700"
                                           : "border-slate-200 bg-slate-50 text-slate-700"
                                       }`}
-                                      title={`${a.name}${a.role ? " · " + (ROLE_LABEL[a.role] || a.role) : ""}${a.locked ? " · 已锁定" : ""}`}
+                                      title={`${a.name}${a.role ? " · " + (ROLE_LABEL[a.role] || a.role) : ""}${a.source === "manual" ? " · 人工预排" : " · 自动排班"}${a.locked ? " · 已锁定" : ""}`}
                                     >
                                       {a.locked ? "🔒" : ""}
                                       {a.name}
                                       {a.role ? <span className="text-[9px] opacity-80">·{ROLE_LABEL[a.role]}</span> : null}
+                                      {a.source === "manual" ? <span className="text-[9px] opacity-70">·人工</span> : null}
                                     </span>
                                   ))
                                 ) : (

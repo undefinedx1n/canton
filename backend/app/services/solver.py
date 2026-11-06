@@ -18,7 +18,7 @@ from __future__ import annotations
 import datetime as dt
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -100,6 +100,8 @@ class Problem:
     period_end: dt.date
     weights: dict[str, float]
     settings: dict[str, Any]
+    # 分块求解时上一块最后一天的岗位，用于跨块"避免连续同岗"
+    prev_positions: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -226,9 +228,10 @@ def build_problem(db: Session, start: dt.date, days: int = 3) -> Problem:
             else {"day_type": "weekend" if d.weekday() >= 5 else "weekday", "is_holiday": False, "is_peak": False, "label": ""}
         )
 
-    # 锁定安排：最近一个与本窗口有交集的草稿版本中的锁定行
+    # 锁定安排：所有与本窗口有交集的草稿版本中的锁定/人工行（跨草稿汇总，避免漏读）
     locked: list[dict[str, Any]] = []
-    draft = (
+    seen_locked: set[tuple[dt.date, int]] = set()
+    draft_versions = (
         db.query(ScheduleVersion)
         .filter(
             ScheduleVersion.status == "draft",
@@ -236,20 +239,39 @@ def build_problem(db: Session, start: dt.date, days: int = 3) -> Problem:
             ScheduleVersion.end_date >= dates[0],
         )
         .order_by(ScheduleVersion.id.desc())
-        .first()
+        .all()
     )
-    if draft:
-        for a in draft.assignments:
-            if a.is_locked and dates[0] <= a.work_date <= dates[-1]:
-                locked.append(
-                    {
-                        "work_date": a.work_date,
-                        "employee_id": a.employee_id,
-                        "position_code": a.position_code,
-                        "shift": a.shift,
-                        "role_code": a.role_code,
-                    }
-                )
+    for a in (
+        db.query(ScheduleAssignment)
+        .filter(
+            ScheduleAssignment.version_id.in_([v.id for v in draft_versions]),
+            ScheduleAssignment.work_date >= dates[0],
+            ScheduleAssignment.work_date <= dates[-1],
+        )
+        .order_by(ScheduleAssignment.version_id.desc(), ScheduleAssignment.work_date)
+        .all()
+        if draft_versions
+        else []
+    ):
+        # 人工预排优先级最高：锁定的行、以及人工新增/修改过的行都固定不动，
+        # 自动排班只补剩下的空缺。
+        if not (a.is_locked or a.source == "manual"):
+            continue
+        key = (a.work_date, a.employee_id)
+        if key in seen_locked:
+            continue
+        seen_locked.add(key)
+        locked.append(
+            {
+                "work_date": a.work_date,
+                "employee_id": a.employee_id,
+                "position_code": a.position_code,
+                "shift": a.shift,
+                "role_code": a.role_code,
+                "source": a.source,
+                "is_locked": a.is_locked,
+            }
+        )
 
     pairing: list[dict[str, Any]] = []
     for p in db.query(PairingPreference).filter(PairingPreference.is_active.is_(True)).all():
@@ -281,6 +303,8 @@ def build_problem(db: Session, start: dt.date, days: int = 3) -> Problem:
             continue
         entry = history[a.employee_id]
         entry["work"] += 1
+        # 岗位轮换均衡需要按岗位统计历史承担次数（同一公平周期口径）
+        entry[f"pos:{a.position_code}"] += 1
         if a.role_code == "duty_supervisor":
             entry["duty"] += 1
         if a.work_date.weekday() >= 5:
@@ -291,6 +315,26 @@ def build_problem(db: Session, start: dt.date, days: int = 3) -> Problem:
             entry["holiday_duty"] += 1 if a.role_code == "duty_supervisor" else 0
         if cday and cday.is_peak:
             entry["peak_duty"] += 1 if a.role_code == "duty_supervisor" else 0
+
+    # 重点岗位的人均承担上限按**整个窗口**预先算好，分块求解时各块共用，
+    # 避免"块内名额少 + 跨块历史多"把正常轮换误判成超额。
+    rotation_cfg = get_setting(db, "rotation_rule")
+    rotation_caps: dict[str, int] = {}
+    for code in rotation_cfg.get("focus_positions") or []:
+        pos = positions.get(code)
+        if pos is None:
+            continue
+        candidates = [
+            e
+            for e in employees.values()
+            if code in e.skills
+            and e.skills[code][2]
+            and (not pos.allowed_types or e.employment_type in pos.allowed_types)
+        ]
+        if len(candidates) < 2:
+            continue
+        slots = sum(demands.get((d, code), (0, 0))[0] for d in dates)
+        rotation_caps[code] = -(-slots // len(candidates)) + 1
 
     return Problem(
         start=dates[0],
@@ -309,6 +353,10 @@ def build_problem(db: Session, start: dt.date, days: int = 3) -> Problem:
             "rest_rule": get_setting(db, "rest_rule"),
             "gap_policy": get_setting(db, "gap_policy"),
             "role_slot_rule": get_setting(db, "role_slot_rule"),
+            "rotation_rule": get_setting(db, "rotation_rule"),
+            "rotation_caps": rotation_caps,
+            # 长窗口分块滚动求解的块长度（0 = 不分块，一次性求解）
+            "solve_chunk_days": int(get_setting(db, "solve_chunk_days").get("days", 7) or 0),
         },
     )
 
@@ -342,12 +390,107 @@ def solve(problem: Problem, mode: str = "draft", timeout: float = 20.0, seed: in
     if not ORTOOLS_AVAILABLE:
         return _solve_heuristic(problem, mode, t0)
     try:
-        result = _solve_cpsat(problem, mode, timeout, seed)
+        # 30 天一次性求解在真实名单上只能拿到"可行解"（45s 仍非最优），
+        # 因此长窗口改为分块滚动：每块 7 天、跨块继承历史与昨日岗位，
+        # 既能把单块解到接近最优，也把单次耗时控制在可接受范围。
+        chunk_days = int(problem.settings.get("solve_chunk_days", 7) or 0)
+        if chunk_days > 0 and len(problem.dates) > chunk_days and mode != "strict":
+            result = _solve_chunked(problem, mode, timeout, seed, chunk_days)
+        else:
+            result = _solve_cpsat(problem, mode, timeout, seed)
+        # 人工预排被硬固定时，若与请假/资格/名额冲突会导致整体不可行。
+        # 这种情况下降级为"只固定显式锁定的行"，并对人工行给出复核提示，
+        # 避免因为一条冲突的人工作业让整张班表排不出来。
+        if result.status == "infeasible" and result.diagnostics.get("solver_status") == "INFEASIBLE":
+            manual_only = [l for l in problem.locked if l.get("source") == "manual" and not l.get("is_locked")]
+            if manual_only:
+                relaxed = replace(problem, locked=[l for l in problem.locked if l.get("is_locked")])
+                retry = _solve_cpsat(relaxed, mode, timeout, seed)
+                if retry.status != "infeasible":
+                    retry.message = (
+                        (retry.message or "").strip()
+                        + f"；人工预排中有 {len(manual_only)} 条与资格/请假/名额冲突，已按软约束重排，请复核"
+                    )
+                    result = retry
     except Exception as exc:  # pragma: no cover - 兜底
         result = _solve_heuristic(problem, mode, t0)
         result.message = f"CP-SAT 求解异常，已退回启发式：{exc}"
     result.duration_ms = int((time.time() - t0) * 1000)
     return result
+
+
+def _carry_history(history: dict[int, dict[str, int]], assignments: list[dict[str, Any]], calendar: dict[dt.date, dict]) -> None:
+    """把已求解的一段结果累加进历史计数，供下一块继续做公平/轮换。"""
+    for a in assignments:
+        entry = history.setdefault(a["employee_id"], {})
+        entry["work"] = entry.get("work", 0) + 1
+        key = f"pos:{a['position_code']}"
+        entry[key] = entry.get(key, 0) + 1
+        if a.get("role_code") == "duty_supervisor":
+            entry["duty"] = entry.get("duty", 0) + 1
+        if a.get("role_code") in ("early_support", "late_support"):
+            entry["support"] = entry.get("support", 0) + 1
+        if a["work_date"].weekday() >= 5:
+            entry["weekend_work"] = entry.get("weekend_work", 0) + 1
+            if a.get("role_code") == "duty_supervisor":
+                entry["weekend_duty"] = entry.get("weekend_duty", 0) + 1
+        c = calendar.get(a["work_date"]) or {}
+        if c.get("is_holiday") and a.get("role_code") == "duty_supervisor":
+            entry["holiday_duty"] = entry.get("holiday_duty", 0) + 1
+        if c.get("is_peak") and a.get("role_code") == "duty_supervisor":
+            entry["peak_duty"] = entry.get("peak_duty", 0) + 1
+
+
+def _solve_chunked(problem: Problem, mode: str, timeout: float, seed: int, chunk_days: int) -> SolveResult:
+    total = len(problem.dates)
+    blocks = [problem.dates[i : i + chunk_days] for i in range(0, total, chunk_days)]
+    per_budget = max(4.0, timeout / max(1, len(blocks)))
+
+    history = {k: dict(v) for k, v in problem.history.items()}
+    assignments: list[dict[str, Any]] = []
+    prev_positions: dict[int, str] = {}
+    breakdown: dict[str, float] = defaultdict(float)
+    statuses: list[str] = []
+    objective = 0.0
+
+    for idx, dates in enumerate(blocks):
+        window = set(dates)
+        sub = replace(
+            problem,
+            dates=dates,
+            demands={k: v for k, v in problem.demands.items() if k[0] in window},
+            calendar={k: v for k, v in problem.calendar.items() if k in window},
+            locked=[l for l in problem.locked if l["work_date"] in window],
+            history=history,
+            prev_positions=prev_positions,
+        )
+        res = _solve_cpsat(sub, mode, per_budget, seed + idx)
+        statuses.append(res.diagnostics.get("solver_status", ""))
+        assignments.extend(res.assignments)
+        objective += res.objective_value or 0.0
+        for k, v in (res.objective_breakdown or {}).items():
+            breakdown[k] += float(v or 0)
+        _carry_history(history, res.assignments, problem.calendar)
+
+        last_day = dates[-1]
+        prev_positions = {
+            a["employee_id"]: a["position_code"] for a in res.assignments if a["work_date"] == last_day
+        }
+
+    diagnostics = _diagnose(problem, assignments, "+".join(statuses))
+    status = "done" if all(s in ("OPTIMAL", "FEASIBLE") for s in statuses) else "infeasible"
+    if status == "done" and diagnostics["total_gap"] > 0 and mode == "strict":
+        status = "infeasible"
+    return SolveResult(
+        status=status,
+        solver="cp-sat",
+        assignments=assignments,
+        diagnostics=diagnostics,
+        objective_value=objective,
+        objective_breakdown={k: float(v) for k, v in breakdown.items()},
+        duration_ms=0,
+        message=f"分块滚动求解（每块 {chunk_days} 天，共 {len(blocks)} 块），缺口 {diagnostics['total_gap']}",
+    )
 
 
 def _pen(md, buckets, key: str, expr, weight: float, name: str, ub: int = BIG):
@@ -420,7 +563,8 @@ def _solve_cpsat(problem: Problem, mode: str, timeout: float, seed: int) -> Solv
             vars_ = [v for (dd, _e, c), v in x.items() if dd == d and c == code]
             if not vars_:
                 # 无任何排班变量，运营角色必然缺失
-                _pen(md, buckets, "gap", 1, w["gap_penalty"], f"norole_{d:%m%d}_{code}", 1)
+                gap_weight = w.get("role_gap", w["gap_penalty"])
+                _pen(md, buckets, "role_gap", 1, gap_weight, f"norole_{d:%m%d}_{code}", 1)
                 continue
             covered = md.NewBoolVar(f"cov_{d:%m%d}_{code}")
             md.Add(sum(vars_) <= target * covered)
@@ -437,7 +581,8 @@ def _solve_cpsat(problem: Problem, mode: str, timeout: float, seed: int) -> Solv
                     md.Add(sum(sup_vars.values()) >= min(pos.min_supervisors, len(sup_vars)) * covered)
             else:
                 md.Add(covered == 0)
-                _pen(md, buckets, "gap", 1, w["gap_penalty"], f"norole_{d:%m%d}_{code}", 1)
+                gap_weight = w.get("role_gap", w["gap_penalty"])
+                _pen(md, buckets, "role_gap", 1, gap_weight, f"norole_{d:%m%d}_{code}", 1)
             # 岗位要求主管时，若无人可担任则整个岗位不排（避免伪造满足）
 
     # 锁定安排：固定变量，并禁止当日改排其他岗位
@@ -528,6 +673,110 @@ def _solve_cpsat(problem: Problem, mode: str, timeout: float, seed: int) -> Solv
                 "fair_excess",
                 999,
             )
+
+    # --------------------------- 岗位轮换 ---------------------------- #
+    # 需求：A3/B3（销售）、B8（摄影）、A2（早辅）、B1（晚辅）尽量不由同一人连续担任，
+    # 并像当值主管 B2 一样按周期平均；其他岗位做弱约束即可。
+    rotation_cfg = problem.settings.get("rotation_rule", {}) or {}
+    focus_set = {c for c in (rotation_cfg.get("focus_positions") or []) if c in positions}
+    w_cons_focus = w.get("rotation_consecutive_focus", 55)
+    w_cons_other = w.get("rotation_consecutive_other", 6)
+
+    if rotation_cfg.get("avoid_consecutive", True):
+        # 跨分块边界：与上一块最后一天同一岗位也要罚
+        for eid, code in problem.prev_positions.items():
+            v = x.get((dates[0], eid, code))
+            if v is None:
+                continue
+            weight = w_cons_focus if code in focus_set else w_cons_other
+            if weight > 0:
+                buckets["rotation_consecutive"].append((v, weight))
+        for i in range(len(dates) - 1):
+            d1, d2 = dates[i], dates[i + 1]
+            for code in positions:
+                weight = w_cons_focus if code in focus_set else w_cons_other
+                if weight <= 0:
+                    continue
+                for eid in emps:
+                    v1, v2 = x.get((d1, eid, code)), x.get((d2, eid, code))
+                    if v1 is None or v2 is None:
+                        continue
+                    both = md.NewBoolVar(f"cons_{code}_{eid}_{i}")
+                    md.Add(both <= v1)
+                    md.Add(both <= v2)
+                    md.Add(both >= v1 + v2 - 1)
+                    buckets["rotation_consecutive"].append((both, weight))
+
+    w_rot = w.get("rotation_balance", 25)
+    if rotation_cfg.get("balance_within_period", True) and w_rot > 0:
+        caps = problem.settings.get("rotation_caps") or {}
+        for code in sorted(focus_set):
+            candidates = [eid for eid in emps if any((d, eid, code) in x for d in dates)]
+            if len(candidates) < 2:
+                continue
+            slots = sum(problem.demands.get((d, code), (0, 0))[0] for d in dates)
+            # 人均可承担次数 +1 的容差；分块求解时必须用整个窗口算出的上限，
+            # 否则块内名额少、跨块历史多，会把历史占用误判成超额。
+            cap = int(caps.get(code) or 0) or (-(-slots // len(candidates)) + 1)
+            for eid in candidates:
+                vars_ = [x[(d, eid, code)] for d in dates if (d, eid, code) in x]
+                if not vars_:
+                    continue
+                hist = int(problem.history.get(eid, {}).get(f"pos:{code}", 0))
+                # 历史已经超过上限时不应再为"过去"付罚，只约束本次窗口的增量
+                eff_cap = max(cap, hist)
+                over = md.NewIntVar(0, len(dates) + hist, f"rotover_{code}_{eid}")
+                md.Add(over >= sum(vars_) + hist - eff_cap)
+                buckets["rotation_balance"].append((over, w_rot))
+
+    # 辅助主管（A2 早班 / B1 晚班）的承担次数在任何两位主管之间也要均衡
+    w_support = w.get("support_fairness", 40)
+    if w_support > 0 and supervisors:
+        support_role_codes = {"early_support", "late_support"}
+        support_terms: dict[int, list[Any]] = {eid: [] for eid in supervisors}
+        for (d, eid, code), var in role_vars.items():
+            if positions[code].supervisor_role_code in support_role_codes and eid in support_terms:
+                support_terms[eid].append(var)
+        if any(support_terms.values()):
+            counts = []
+            for eid, terms in support_terms.items():
+                hist = int(problem.history.get(eid, {}).get("support", 0))
+                c = md.NewIntVar(0, len(dates) + hist, f"supcnt_{eid}")
+                md.Add(c == sum(terms) + hist)
+                counts.append(c)
+            if len(counts) > 1:
+                mx = md.NewIntVar(0, len(dates) + 400, "supmax")
+                mn = md.NewIntVar(0, len(dates) + 400, "supmin")
+                md.AddMaxEquality(mx, counts)
+                md.AddMinEquality(mn, counts)
+                spread = md.NewIntVar(0, len(dates) + 400, "supspread")
+                md.Add(spread == mx - mn)
+                buckets["support_fairness"].append((spread, w_support))
+
+    # 每人早/晚班次数差：避免同一个人长期只站早班或只站晚班
+    w_shift = w.get("shift_balance", 12)
+    if w_shift > 0:
+        for eid, emp in emps.items():
+            # 只具备单班次岗位资格的人无法平衡，跳过以免白白拉扯目标函数
+            avail_shifts = {
+                positions[c].shift
+                for c, (_p, _pr, allowed) in emp.skills.items()
+                if allowed and c in positions
+            }
+            if len(avail_shifts) < 2:
+                continue
+            early_vars = [v for (d, ee, c), v in x.items() if ee == eid and positions[c].shift == "early"]
+            late_vars = [v for (d, ee, c), v in x.items() if ee == eid and positions[c].shift == "late"]
+            if not early_vars or not late_vars:
+                continue
+            e_cnt = md.NewIntVar(0, len(dates), f"ecnt_{eid}")
+            l_cnt = md.NewIntVar(0, len(dates), f"lcnt_{eid}")
+            md.Add(e_cnt == sum(early_vars))
+            md.Add(l_cnt == sum(late_vars))
+            diff = md.NewIntVar(0, len(dates), f"sdiff_{eid}")
+            md.Add(diff >= e_cnt - l_cnt)
+            md.Add(diff >= l_cnt - e_cnt)
+            buckets["shift_balance"].append((diff, w_shift))
 
     # 休息目标（长期员工周期内应休天数）
     rest_rule = problem.settings.get("rest_rule", {})

@@ -188,9 +188,9 @@ def generate(payload: GenerateRequest, db: Session = Depends(get_db), user: User
     if payload.days < 1 or payload.days > 31:
         raise HTTPException(400, "排班天数需在 1~31 天之间（一个自然月内）")
     problem = build_problem(db, payload.start_date, payload.days)
-    # 求解时间随窗口线性放宽：30 天规模实测约 6s，留足余量给人数更多的真实名单，
-    # 上限 90s 避免长时间占用请求；超时也会返回当前最优解而不是失败。
-    budget = min(90.0, max(settings.solver_max_time_seconds, payload.days * 2.5))
+    # 长窗口按 7 天分块滚动求解（见 solver._solve_chunked），单块求解时间决定总耗时。
+    # 30 天实测约 13s；预算按天数线性放宽但封顶 60s，避免请求长时间挂起。
+    budget = min(60.0, max(12.0, payload.days * 1.2))
     result = solve(
         problem,
         mode=payload.mode,
@@ -260,7 +260,7 @@ def reoptimize(version_id: int, db: Session = Depends(get_db), user: User = Depe
         raise HTTPException(404, "版本不存在")
     days = (version.end_date - version.start_date).days + 1
     problem = build_problem(db, version.start_date, days)
-    budget = min(90.0, max(settings.solver_max_time_seconds, days * 2.5))
+    budget = min(60.0, max(12.0, days * 1.2))
     result = solve(problem, mode="draft", timeout=budget, seed=settings.solver_random_seed)
     target, forked = _ensure_editable(db, version, user)
     db.query(ScheduleAssignment).filter(ScheduleAssignment.version_id == target.id).delete()

@@ -23,6 +23,14 @@ def _published_in_period(db: Session, start: dt.date, end: dt.date, exclude_vers
     return q.all()
 
 
+# 当日角色展示顺序：当值主管（B2）优先，其次早班辅助（A2）、晚班辅助（B1）
+_ROLE_ORDER = {"duty_supervisor": 0, "early_support": 1, "late_support": 2}
+
+
+def _role_priority(a: ScheduleAssignment) -> tuple[int, str, int]:
+    return (_ROLE_ORDER.get(a.role_code or "", 9), a.position_code, a.employee_id)
+
+
 def version_stats(db: Session, version: ScheduleVersion) -> dict:
     dates = sorted({a.work_date for a in version.assignments}) or [version.start_date + dt.timedelta(days=i) for i in range((version.end_date - version.start_date).days + 1)]
     assignments = version.assignments
@@ -94,8 +102,14 @@ def version_stats(db: Session, version: ScheduleVersion) -> dict:
                         "name": emps[a.employee_id].name if a.employee_id in emps else "",
                         "role_code": a.role_code,
                         "role_name": roles[a.role_code].name if a.role_code in roles else (a.role_code or ""),
+                        "position_code": a.position_code,
+                        "shift": a.shift,
+                        "source": a.source,
+                        # 当值主管（B2）是每日唯一的"值班负责人"，其余为辅助角色；
+                        # 前端据此排序显示，避免把 A2/B1 误当成当值主管。
+                        "is_duty": a.role_code == "duty_supervisor",
                     }
-                    for a in day_assignments
+                    for a in sorted(day_assignments, key=_role_priority)
                     if a.role_code
                 ],
             }
