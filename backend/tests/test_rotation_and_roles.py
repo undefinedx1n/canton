@@ -81,12 +81,15 @@ def test_focus_position_rotates_between_people(db):
 
 
 def test_shift_balance_for_multi_shift_employee(db):
-    """同时具备早/晚班岗位资格的员工，不应整窗口只排单一班次。
+    """同时具备早/晚班岗位资格的员工，长期不应只排单一班次，但也不该天天来回切。
 
     为了让这条软约束可判定，这里构造一个"只能由他顶 A1/B7"的场景：
     其他人不具备这两个岗位资格、其他岗位需求清零，这样早/晚次数完全由他决定，
     求解器没有"换个人来上"的捷径。软约束在多人竞争场景下会被其他目标拉扯，
     那属于目标取舍，不适合作为回归断言。
+
+    口径调整（补充需求）：班次连续性优先，因此不再要求 4 天内就切换，
+    而是要求"整段连续 + 早晚都能轮到 + 切换次数很少"。
     """
     from app.models import EmployeePositionSkill
 
@@ -105,18 +108,24 @@ def test_shift_balance_for_multi_shift_employee(db):
             EmployeePositionSkill(employee_id=emp.id, position_code="B7", priority=1, proficiency=3, allowed=True),
         ]
     )
-    days = DATES[:4]
+    days = DATES[:8]
     for d in days:
         set_day(db, d)
     force_demand(db, days, {"A1": 1, "B7": 1}, zero_others=True)
     db.commit()
 
     problem = build_problem(db, START, len(days))
-    res = solve(problem, mode="draft", timeout=15.0)
-    mine = [a for a in res.assignments if a["employee_id"] == emp.id]
+    res = solve(problem, mode="draft", timeout=20.0)
+    mine = sorted(
+        (a for a in res.assignments if a["employee_id"] == emp.id), key=lambda a: a["work_date"]
+    )
     assert mine, "该员工应有排班"
     shifts = {a["shift"] for a in mine}
-    assert shifts == {"early", "late"}, f"单一班次未被纠正：{shifts}"
+    assert shifts == {"early", "late"}, f"整窗口只排了单一班次，未被纠正：{shifts}"
+    switches = sum(
+        1 for i in range(1, len(mine)) if mine[i]["shift"] != mine[i - 1]["shift"]
+    )
+    assert switches <= 2, f"8 天内切换 {switches} 次，过于频繁：{[a['shift'] for a in mine]}"
 
 
 def test_manual_assignment_survives_regeneration(db, client):

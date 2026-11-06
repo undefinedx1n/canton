@@ -26,3 +26,7 @@ backups/
 .DS_Store
 Thumbs.db
 *.tsbuildinfo
+
+# 本地临时产物
+backend/data/
+pytest.log

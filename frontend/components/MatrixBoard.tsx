@@ -79,6 +79,20 @@ export default function MatrixBoard({ data }: { data: MatrixData | null }) {
           {data.summary.employees} 人 · {data.summary.dates} 天 · 平均上班 {data.summary.avg_work_days} 天 · 每日平均休息{" "}
           {data.summary.avg_rest_per_day} 人
         </div>
+        <div
+          className={`rounded border px-2 py-0.5 text-[11px] ${
+            data.summary.over_rest_cap_staff > 0
+              ? "border-amber-300 bg-amber-50 text-amber-700"
+              : "border-emerald-200 bg-emerald-50 text-emerald-700"
+          }`}
+          title="班次切换越少越好；「晚→早」指前一天晚班、次日直接转早班（中间没有休息）；连休上限来自休息规则配置"
+        >
+          班次切换 {data.summary.total_shift_switches} 次（晚→早 {data.summary.total_late_to_early}）· 最长连休{" "}
+          {data.summary.max_rest_run} 天
+          {data.summary.rest_cap > 0 && data.summary.over_rest_cap_staff > 0
+            ? ` · ${data.summary.over_rest_cap_staff} 人超连休上限(${data.summary.rest_cap}天)`
+            : ""}
+        </div>
         <div className="ml-auto flex items-center gap-2">
           <input
             className="input h-8 w-32 text-xs"

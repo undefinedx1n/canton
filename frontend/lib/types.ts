@@ -327,6 +327,9 @@ export interface MatrixRow {
   early_count: number;
   late_count: number;
   duty_count: number;
+  shift_switches: number;
+  late_to_early_switches: number;
+  max_rest_run: number;
   cells: Record<string, MatrixCell>;
 }
 
@@ -359,5 +362,11 @@ export interface MatrixData {
     total_leave: number;
     avg_work_days: number;
     avg_rest_per_day: number;
+    total_shift_switches: number;
+    avg_shift_switches: number;
+    total_late_to_early: number;
+    max_rest_run: number;
+    rest_cap: number;
+    over_rest_cap_staff: number;
   };
 }

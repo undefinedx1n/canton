@@ -22,6 +22,7 @@ from ..models import (
     ScheduleAssignment,
     ScheduleVersion,
 )
+from .config_service import get_setting
 
 # 单元格类型
 CELL_WORK = "work"
@@ -30,6 +31,14 @@ CELL_LEAVE = "leave"
 CELL_INACTIVE = "inactive"
 
 WEEKDAY_CN = "一二三四五六日"
+
+
+def _rest_cap(db: Session) -> int:
+    """连休上限（来自 rest_rule 配置，缺失时按默认 3 天）。"""
+    try:
+        return int(get_setting(db, "rest_rule").get("max_consecutive_rest_days", 3) or 0)
+    except (TypeError, ValueError):
+        return 3
 
 
 def _approved_leaves(
@@ -94,6 +103,9 @@ def version_matrix(db: Session, version: ScheduleVersion) -> dict:
     for e in people:
         cells: dict[str, dict] = {}
         work_days = early = late = duty = rest_days = leave_days = 0
+        switches = late_to_early = 0
+        max_rest_run = cur_rest_run = 0
+        prev_shift: str | None = None
         for d in dates:
             key = d.isoformat()
             a = by_key.get((d, e.id))
@@ -119,6 +131,14 @@ def version_matrix(db: Session, version: ScheduleVersion) -> dict:
                     late += 1
                 if a.role_code == "duty_supervisor":
                     duty += 1
+                # 班次连续性质量指标：相邻两天都上班且班次不同算一次切换
+                if a.shift in ("early", "late"):
+                    if prev_shift and prev_shift != a.shift:
+                        switches += 1
+                        if prev_shift == "late" and a.shift == "early":
+                            late_to_early += 1
+                    prev_shift = a.shift
+                cur_rest_run = 0
                 continue
 
             leave = leaves.get((e.id, d))
@@ -130,6 +150,10 @@ def version_matrix(db: Session, version: ScheduleVersion) -> dict:
             else:
                 cells[key] = {"kind": CELL_REST}
                 rest_days += 1
+            # 休息/请假都算"不在岗"，会打断班次连续性，同时累计连休天数
+            prev_shift = None
+            cur_rest_run += 1
+            max_rest_run = max(max_rest_run, cur_rest_run)
 
         rows.append(
             {
@@ -147,6 +171,9 @@ def version_matrix(db: Session, version: ScheduleVersion) -> dict:
                 "early_count": early,
                 "late_count": late,
                 "duty_count": duty,
+                "shift_switches": switches,
+                "late_to_early_switches": late_to_early,
+                "max_rest_run": max_rest_run,
                 "cells": cells,
             }
         )
@@ -171,6 +198,8 @@ def version_matrix(db: Session, version: ScheduleVersion) -> dict:
         )
 
     total_work = sum(r["work_days"] for r in rows)
+    total_switches = sum(r["shift_switches"] for r in rows)
+    rest_cap = _rest_cap(db)
     summary = {
         "employees": len(rows),
         "supervisors": sum(1 for r in rows if r["is_supervisor"]),
@@ -180,6 +209,13 @@ def version_matrix(db: Session, version: ScheduleVersion) -> dict:
         "total_leave": sum(r["leave_days"] for r in rows),
         "avg_work_days": round(total_work / len(rows), 1) if rows else 0,
         "avg_rest_per_day": round(sum(d["rest_count"] for d in days) / len(days), 1) if days else 0,
+        # 班次连续性 / 连休质量：用来快速判断"是不是又要手动微调"
+        "total_shift_switches": total_switches,
+        "avg_shift_switches": round(total_switches / len(rows), 2) if rows else 0,
+        "total_late_to_early": sum(r["late_to_early_switches"] for r in rows),
+        "max_rest_run": max((r["max_rest_run"] for r in rows), default=0),
+        "rest_cap": rest_cap,
+        "over_rest_cap_staff": sum(1 for r in rows if rest_cap and r["max_rest_run"] > rest_cap),
     }
 
     return {

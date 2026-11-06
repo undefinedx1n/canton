@@ -15,6 +15,8 @@ DEFAULT_SETTINGS: dict[str, tuple[dict[str, Any], str]] = {
             "cycle_start_day": 1,
             "apply_to_formal_only": True,
             "holiday_work_compensated": False,
+            # 连休上限：同一员工不得连续休息超过该天数（硬约束，人工锁定/请假豁免）
+            "max_consecutive_rest_days": 3,
         },
         "长期员工休息周期口径（需求文档 17.1，待确认，可配置）",
     ),
@@ -53,7 +55,9 @@ DEFAULT_SETTINGS: dict[str, tuple[dict[str, Any], str]] = {
             # 三个主管角色（B2 当值 / A2 早辅 / B1 晚辅）缺失视为严重违规：
             # 权重高于普通缺口，保证"能排就一定排"，但仍是软约束以便不可行时降级而不是整体失败
             "role_gap": 2000,
-            "duty_fairness": 45,
+            # 当值（B2）均衡权重高于岗位轮换/班次连续性：30 天窗口下若权重偏低，
+            # 新加的连续性约束会把时间预算吃光，出现 [4,4,5,5,6,6] 这种偏差 2 次的分布。
+            "duty_fairness": 90,
             "weekend_fairness": 30,
             "holiday_fairness": 22,
             "peak_fairness": 18,
@@ -73,8 +77,18 @@ DEFAULT_SETTINGS: dict[str, tuple[dict[str, Any], str]] = {
             "rotation_balance": 70,
             # 早班辅助 A2 / 晚班辅助 B1 在主管之间的承担次数均衡
             "support_fairness": 40,
-            # 每人早/晚班次数差
-            "shift_balance": 30,
+            # 每人早/晚班次数差（优先级低于班次连续性，作为跨周期纠偏用）
+            "shift_balance": 8,
+            # 早/晚次数差允许的容差（天），超过后按超标天数重罚，避免整月只站一个班次
+            "shift_balance_tolerance": 3,
+            "shift_balance_excess": 55,
+            # 班次连续性：相邻两天早晚班不同 → 换班次代价；必须明显高于 rotation_consecutive_focus，
+            # 才能让"轮换岗位"发生在同一班次内，而不是连带把班次也换掉
+            "shift_switch": 90,
+            # 晚班次日直接转早班（中间没有休息）的额外加罚 → "晚转早尽量休息后转"
+            "shift_switch_late_to_early": 110,
+            # 连休上限降级为软约束时的违规代价（仅在人力密度不足、硬约束无解时启用）
+            "max_rest_run": 250,
         },
         "软约束权重（需求文档 17.8 建议默认值）",
     ),

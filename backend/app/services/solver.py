@@ -8,8 +8,10 @@
   5. 运营角色只能由 is_supervisor=True 的员工承担。
   6. 已批准请假/不可用时间不能排班。
   7. 已锁定安排不参与求解、不可被移动。
+  8. 连休上限：同一员工不允许连续休息超过「max_consecutive_rest_days」（默认 3）天；
+     人工锁定/请假造成、且整段无法由自动排班调节的窗口自动豁免（人工不受影响）。
 软约束（权重可配置）：主管当值/周末/节假日/旺季公平、休息目标、班次偏好、
-岗位优先级、搭班偏好、旺季能力匹配、工作量均衡。
+岗位优先级、搭班偏好、旺季能力匹配、工作量均衡、班次连续性（含"晚转早需休息"）。
 
 优先使用 OR-Tools CP-SAT；依赖缺失或异常时退化为启发式，保证系统可用并给出明确提示。
 """
@@ -36,7 +38,7 @@ from ..models import (
     ScheduleAssignment,
     ScheduleVersion,
 )
-from .config_service import get_setting, weights
+from .config_service import DEFAULT_SETTINGS, get_setting, weights
 
 try:  # pragma: no cover - 环境相关
     import contextlib
@@ -102,6 +104,11 @@ class Problem:
     settings: dict[str, Any]
     # 分块求解时上一块最后一天的岗位，用于跨块"避免连续同岗"
     prev_positions: dict[int, str] = field(default_factory=dict)
+    # 分块/窗口边界的"前一天班次"与"到边界为止的连休天数"，用于班次连续性与连休上限
+    prev_shift: dict[int, str] = field(default_factory=dict)
+    prev_rest_streak: dict[int, int] = field(default_factory=dict)
+    # 连休上限的强度：hard=必须满足；soft=人力不足时允许最小化违规（用于降级重试）
+    rest_cap_mode: str = "hard"
 
 
 @dataclass
@@ -318,6 +325,33 @@ def build_problem(db: Session, start: dt.date, days: int = 3) -> Problem:
         if cday and cday.is_peak:
             entry["peak_duty"] += 1 if a.role_code == "duty_supervisor" else 0
 
+    # 窗口边界：取窗口开始前（已发布版本）的最后出勤班次与连休天数。
+    # 这两项只用于"跨窗口"判断，窗口内部由求解器自己决定，不影响历史统计口径。
+    lookback = 21
+    prev_shift: dict[int, str] = {}
+    prev_rest_streak: dict[int, int] = {}
+    recent_rows = (
+        db.query(ScheduleAssignment.employee_id, ScheduleAssignment.work_date, ScheduleAssignment.shift)
+        .join(ScheduleVersion, ScheduleVersion.id == ScheduleAssignment.version_id)
+        .filter(ScheduleVersion.status == "published")
+        .filter(ScheduleAssignment.work_date >= dates[0] - dt.timedelta(days=lookback))
+        .filter(ScheduleAssignment.work_date < dates[0])
+        .all()
+    )
+    worked_recent: dict[int, dict[dt.date, str]] = defaultdict(dict)
+    for eid, wd, sh in recent_rows:
+        worked_recent[eid][wd] = sh
+    for eid, days_worked in worked_recent.items():
+        yesterday = dates[0] - dt.timedelta(days=1)
+        if yesterday in days_worked:
+            prev_shift[eid] = days_worked[yesterday]
+        streak = 0
+        cursor = yesterday
+        while cursor >= dates[0] - dt.timedelta(days=lookback) and cursor not in days_worked:
+            streak += 1
+            cursor -= dt.timedelta(days=1)
+        prev_rest_streak[eid] = streak
+
     # 重点岗位的人均承担上限按**整个窗口**预先算好，分块求解时各块共用，
     # 避免"块内名额少 + 跨块历史多"把正常轮换误判成超额。
     rotation_cfg = get_setting(db, "rotation_rule")
@@ -352,7 +386,7 @@ def build_problem(db: Session, start: dt.date, days: int = 3) -> Problem:
         period_end=period_end,
         weights=weights(db),
         settings={
-            "rest_rule": get_setting(db, "rest_rule"),
+            "rest_rule": {**DEFAULT_SETTINGS["rest_rule"][0], **get_setting(db, "rest_rule")},
             "gap_policy": get_setting(db, "gap_policy"),
             "role_slot_rule": get_setting(db, "role_slot_rule"),
             "rotation_rule": get_setting(db, "rotation_rule"),
@@ -360,6 +394,8 @@ def build_problem(db: Session, start: dt.date, days: int = 3) -> Problem:
             # 长窗口分块滚动求解的块长度（0 = 不分块，一次性求解）
             "solve_chunk_days": int(get_setting(db, "solve_chunk_days").get("days", 7) or 0),
         },
+        prev_shift=prev_shift,
+        prev_rest_streak=prev_rest_streak,
     )
 
 
@@ -403,17 +439,31 @@ def solve(problem: Problem, mode: str = "draft", timeout: float = 20.0, seed: in
         # 人工预排被硬固定时，若与请假/资格/名额冲突会导致整体不可行。
         # 这种情况下降级为"只固定显式锁定的行"，并对人工行给出复核提示，
         # 避免因为一条冲突的人工作业让整张班表排不出来。
-        if result.status == "infeasible" and result.diagnostics.get("solver_status") == "INFEASIBLE":
+        # 若仍不可行，再退一步放宽「连休上限」（人力实在不够时宁可连休超限，也不能排不出班）。
+        if result.status == "infeasible" and "INFEASIBLE" in str(result.diagnostics.get("solver_status", "")):
             manual_only = [l for l in problem.locked if l.get("source") == "manual" and not l.get("is_locked")]
+            attempts: list[tuple[Problem, str]] = []
             if manual_only:
-                relaxed = replace(problem, locked=[l for l in problem.locked if l.get("is_locked")])
-                retry = _solve_cpsat(relaxed, mode, timeout, seed)
-                if retry.status != "infeasible":
-                    retry.message = (
-                        (retry.message or "").strip()
-                        + f"；人工预排中有 {len(manual_only)} 条与资格/请假/名额冲突，已按软约束重排，请复核"
+                attempts.append(
+                    (
+                        replace(problem, locked=[l for l in problem.locked if l.get("is_locked")]),
+                        f"；人工预排中有 {len(manual_only)} 条与资格/请假/名额冲突，已按软约束重排，请复核",
                     )
+                )
+            rest_cfg = dict(problem.settings.get("rest_rule", {}) or {})
+            if int(rest_cfg.get("max_consecutive_rest_days", 0) or 0) > 0 and problem.rest_cap_mode == "hard":
+                attempts.append(
+                    (
+                        replace(problem, rest_cap_mode="soft"),
+                        "；人力密度不足以满足连休上限，已改为最小化连休超标",
+                    )
+                )
+            for cand, note in attempts:
+                retry = _solve_cpsat(cand, mode, timeout, seed)
+                if retry.status != "infeasible":
+                    retry.message = (retry.message or "").strip() + note
                     result = retry
+                    break
     except Exception as exc:  # pragma: no cover - 兜底
         result = _solve_heuristic(problem, mode, t0)
         result.message = f"CP-SAT 求解异常，已退回启发式：{exc}"
@@ -452,8 +502,11 @@ def _solve_chunked(problem: Problem, mode: str, timeout: float, seed: int, chunk
     history = {k: dict(v) for k, v in problem.history.items()}
     assignments: list[dict[str, Any]] = []
     prev_positions: dict[int, str] = {}
+    prev_shift: dict[int, str] = dict(problem.prev_shift)
+    rest_streak: dict[int, int] = {eid: int(v or 0) for eid, v in problem.prev_rest_streak.items()}
     breakdown: dict[str, float] = defaultdict(float)
     statuses: list[str] = []
+    notes: list[str] = []
     objective = 0.0
 
     for idx, dates in enumerate(blocks):
@@ -466,8 +519,22 @@ def _solve_chunked(problem: Problem, mode: str, timeout: float, seed: int, chunk
             locked=[l for l in problem.locked if l["work_date"] in window],
             history=history,
             prev_positions=prev_positions,
+            prev_shift=prev_shift,
+            prev_rest_streak=rest_streak,
         )
         res = _solve_cpsat(sub, mode, per_budget, seed + idx)
+        if res.status == "infeasible" and int(
+            (sub.settings.get("rest_rule", {}) or {}).get("max_consecutive_rest_days", 0) or 0
+        ) > 0 and sub.rest_cap_mode == "hard":
+            # 人力密度太低（例如人均名额不足）时"连休不超 3 天"可能无解。
+            # 改为软约束重解本块：只最小化违规次数，保证班表仍能出（人工/请假不受影响）。
+            relaxed = replace(sub, rest_cap_mode="soft")
+            retry = _solve_cpsat(relaxed, mode, per_budget, seed + idx)
+            if retry.status != "infeasible":
+                notes.append(f"第 {idx + 1} 块人力密度不足，连休上限已改为最小化超标")
+                res = retry
+        elif "连休上限未强制" in (res.message or "") and not any("连休上限未强制" in n for n in notes):
+            notes.append(f"第 {idx + 1} 块人力密度不足，连休上限未强制")
         statuses.append(res.diagnostics.get("solver_status", ""))
         assignments.extend(res.assignments)
         objective += res.objective_value or 0.0
@@ -479,11 +546,30 @@ def _solve_chunked(problem: Problem, mode: str, timeout: float, seed: int, chunk
         prev_positions = {
             a["employee_id"]: a["position_code"] for a in res.assignments if a["work_date"] == last_day
         }
+        prev_shift = {a["employee_id"]: a["shift"] for a in res.assignments if a["work_date"] == last_day}
+        # 连休天数同样要跨块累计，否则每块都以为员工"刚开始休息"，连休上限形同失效
+        worked_days: dict[int, set[dt.date]] = defaultdict(set)
+        for a in res.assignments:
+            worked_days[a["employee_id"]].add(a["work_date"])
+        for eid in problem.employees:
+            streak = 0
+            cursor = last_day
+            mine = worked_days.get(eid, set())
+            while cursor >= dates[0] and cursor not in mine:
+                streak += 1
+                cursor -= dt.timedelta(days=1)
+            if streak == len(dates):
+                # 整块都没出勤：接上上一块的连休
+                streak += rest_streak.get(eid, 0)
+            rest_streak[eid] = streak
 
     diagnostics = _diagnose(problem, assignments, "+".join(statuses))
     status = "done" if all(s in ("OPTIMAL", "FEASIBLE") for s in statuses) else "infeasible"
     if status == "done" and diagnostics["total_gap"] > 0 and mode == "strict":
         status = "infeasible"
+    message = f"分块滚动求解（每块 {chunk_days} 天，共 {len(blocks)} 块），缺口 {diagnostics['total_gap']}"
+    if notes:
+        message += "；" + "；".join(notes)
     return SolveResult(
         status=status,
         solver="cp-sat",
@@ -492,7 +578,7 @@ def _solve_chunked(problem: Problem, mode: str, timeout: float, seed: int, chunk
         objective_value=objective,
         objective_breakdown={k: float(v) for k, v in breakdown.items()},
         duration_ms=0,
-        message=f"分块滚动求解（每块 {chunk_days} 天，共 {len(blocks)} 块），缺口 {diagnostics['total_gap']}",
+        message=message,
     )
 
 
@@ -756,8 +842,113 @@ def _solve_cpsat(problem: Problem, mode: str, timeout: float, seed: int) -> Solv
                 md.Add(spread == mx - mn)
                 buckets["support_fairness"].append((spread, w_support))
 
-    # 每人早/晚班次数差：避免同一个人长期只站早班或只站晚班
-    w_shift = w.get("shift_balance", 12)
+    # --------------------------- 班次连续性 ---------------------------- #
+    # 需求：能连续上同一班次就连续上，不要天天早晚切换；晚班转早班尽量排在休息之后。
+    # 岗位轮换（尤其是重点岗位"不要连续同岗"）会推动每天换岗位，因此必须让"换班次"的
+    # 代价明显高于"换岗位"，否则轮换会顺带把班次也换来换去。
+    by_shift: dict[tuple[dt.date, int], dict[str, list[Any]]] = defaultdict(lambda: {"early": [], "late": []})
+    for (d, eid, code), var in x.items():
+        shift = positions[code].shift
+        if shift in ("early", "late"):
+            by_shift[(d, eid)][shift].append(var)
+
+    def _and(a, b, name: str):
+        both = md.NewBoolVar(name)
+        md.Add(both <= a)
+        md.Add(both <= b)
+        md.Add(both >= a + b - 1)
+        return both
+
+    w_switch = w.get("shift_switch", 90)
+    w_l2e = w.get("shift_switch_late_to_early", 110)
+    if w_switch > 0 and len(dates) > 1:
+        # 跨分块边界：与上一块最后一天的班次比较
+        for eid, prev in problem.prev_shift.items():
+            g = by_shift.get((dates[0], eid))
+            if not g:
+                continue
+            if prev == "early":
+                for v in g["late"]:
+                    buckets["shift_switch"].append((v, w_switch))
+            elif prev == "late":
+                for v in g["early"]:
+                    buckets["shift_switch"].append((v, w_switch))
+                    if w_l2e > 0:
+                        buckets["shift_switch_late_to_early"].append((v, w_l2e))
+
+        for i in range(len(dates) - 1):
+            d1, d2 = dates[i], dates[i + 1]
+            for eid in emps:
+                g1 = by_shift.get((d1, eid))
+                g2 = by_shift.get((d2, eid))
+                if not g1 or not g2:
+                    continue
+                if g1["early"] and g2["late"]:
+                    sw = _and(sum(g1["early"]), sum(g2["late"]), f"sw_el_{eid}_{i}")
+                    buckets["shift_switch"].append((sw, w_switch))
+                if g1["late"] and g2["early"]:
+                    # 晚 → 早相邻（中间无休息）：额外加罚，让求解器优先"休息后再转早班"
+                    sw = _and(sum(g1["late"]), sum(g2["early"]), f"sw_le_{eid}_{i}")
+                    buckets["shift_switch"].append((sw, w_switch))
+                    if w_l2e > 0:
+                        buckets["shift_switch_late_to_early"].append((sw, w_l2e))
+
+    # --------------------------- 连休上限 ---------------------------- #
+    # 硬约束：不允许连续休息超过 max_consecutive_rest_days 天。
+    # 人工锁定优先：若某个窗口内整天都是人工固定（锁定上班/锁定休息/请假导致整天可排变量为空），
+    # 该窗口由人工决定，直接跳过，不参与约束。
+    rest_rule_cfg = problem.settings.get("rest_rule", {}) or {}
+    max_rest = int(rest_rule_cfg.get("max_consecutive_rest_days", 3) or 0)
+    rest_notes: list[str] = []
+    if max_rest > 0:
+        # 容量预检：任何一天上班最多"覆盖" max_rest+1 天，所以 N 天内每人都至少
+        # 要出勤 ceil(N/(max_rest+1)) 天；若「可排人数 × 该下限」超过窗口内总名额，
+        # 这条规则在数学上就无解（典型：6 名主管抢 1 个当值名额/天）。
+        # 这种场景必须直接跳过，否则一个必然违规的惩罚项会去扭曲当值公平等其他目标。
+        total_slots = sum(
+            int((problem.demands.get(k) or (0, 0))[0] or 0) for k in problem.demands
+        )
+        assignable = len({eid for (_d, eid, _c) in x})
+        min_per_emp = -(-len(dates) // (max_rest + 1))
+        if assignable and min_per_emp > 0 and total_slots < min_per_emp * assignable:
+            max_rest = 0
+            rest_notes.append("人力密度不足，连休上限未强制（建议增加人员或放宽名额）")
+    if max_rest > 0:
+        soft_cap = problem.rest_cap_mode == "soft"
+        w_rest_run = w.get("max_rest_run", 250)
+        work_by_day: dict[tuple[dt.date, int], list[Any]] = defaultdict(list)
+        for (d, eid, _code), var in x.items():
+            work_by_day[(d, eid)].append(var)
+        for eid in emps:
+            windows: list[list[dt.date]] = []
+            streak = int(problem.prev_rest_streak.get(eid, 0) or 0)
+            if streak > 0:
+                # 连休已跨过窗口边界：窗口开头需要补上一个工作日的长度才算断开
+                need = max(1, max_rest + 1 - streak)
+                windows.append(dates[:need])
+            for i in range(len(dates) - max_rest):
+                windows.append(dates[i : i + max_rest + 1])
+            for win in windows:
+                open_days = [d for d in win if (d, eid) in work_by_day]
+                if not open_days:
+                    continue
+                terms = [v for d in win for v in work_by_day[(d, eid)]]
+                if soft_cap:
+                    over = md.NewBoolVar(f"rest_run_{eid}_{win[0]:%m%d}")
+                    md.Add(sum(terms) + over >= 1)
+                    if w_rest_run > 0:
+                        buckets["max_rest_run"].append((over, w_rest_run))
+                else:
+                    md.Add(sum(terms) >= 1)
+
+
+    # 每人早/晚班次数差：长期不能只站早班或只站晚班。
+    # 权重刻意低于班次连续性 —— 连续性优先用"整段早 → 休息 → 整段晚"的方式满足均衡，
+    # 而不是靠每天来回切换来凑次数。容许小幅偏差（默认 3 天），
+    # 超过容差后按"超标天数"重罚，避免出现"整月只站晚班"的极端偏斜。
+    w_shift = w.get("shift_balance", 8)
+    w_shift_over = w.get("shift_balance_excess", 55)
+    shift_tol = int(w.get("shift_balance_tolerance", 3) or 0)
     if w_shift > 0:
         for eid, emp in emps.items():
             # 只具备单班次岗位资格的人无法平衡，跳过以免白白拉扯目标函数
@@ -783,6 +974,10 @@ def _solve_cpsat(problem: Problem, mode: str, timeout: float, seed: int) -> Solv
             md.Add(diff >= e_cnt - l_cnt)
             md.Add(diff >= l_cnt - e_cnt)
             buckets["shift_balance"].append((diff, w_shift))
+            if w_shift_over > 0:
+                over = md.NewIntVar(0, len(dates) + 400, f"sdiffover_{eid}")
+                md.Add(over >= diff - shift_tol)
+                buckets["shift_balance_excess"].append((over, w_shift_over))
 
     # 休息目标（长期员工周期内应休天数）
     rest_rule = problem.settings.get("rest_rule", {})
@@ -934,6 +1129,8 @@ def _solve_cpsat(problem: Problem, mode: str, timeout: float, seed: int) -> Solv
         "UNKNOWN": "求解超时且未找到可行解",
         "MODEL_INVALID": "模型定义无效",
     }.get(status_name, status_name)
+    if rest_notes:
+        message += "；" + "；".join(rest_notes)
 
     return SolveResult(
         status=result_status,
