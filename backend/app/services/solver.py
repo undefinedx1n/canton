@@ -305,6 +305,8 @@ def build_problem(db: Session, start: dt.date, days: int = 3) -> Problem:
         entry["work"] += 1
         # 岗位轮换均衡需要按岗位统计历史承担次数（同一公平周期口径）
         entry[f"pos:{a.position_code}"] += 1
+        # 早晚班平衡同样要跨周期累计，否则分块求解时每块都从 0 起算
+        entry[a.shift] = entry.get(a.shift, 0) + 1
         if a.role_code == "duty_supervisor":
             entry["duty"] += 1
         if a.work_date.weekday() >= 5:
@@ -426,6 +428,7 @@ def _carry_history(history: dict[int, dict[str, int]], assignments: list[dict[st
         entry["work"] = entry.get("work", 0) + 1
         key = f"pos:{a['position_code']}"
         entry[key] = entry.get(key, 0) + 1
+        entry[a["shift"]] = entry.get(a["shift"], 0) + 1
         if a.get("role_code") == "duty_supervisor":
             entry["duty"] = entry.get("duty", 0) + 1
         if a.get("role_code") in ("early_support", "late_support"):
@@ -769,11 +772,14 @@ def _solve_cpsat(problem: Problem, mode: str, timeout: float, seed: int) -> Solv
             late_vars = [v for (d, ee, c), v in x.items() if ee == eid and positions[c].shift == "late"]
             if not early_vars or not late_vars:
                 continue
-            e_cnt = md.NewIntVar(0, len(dates), f"ecnt_{eid}")
-            l_cnt = md.NewIntVar(0, len(dates), f"lcnt_{eid}")
-            md.Add(e_cnt == sum(early_vars))
-            md.Add(l_cnt == sum(late_vars))
-            diff = md.NewIntVar(0, len(dates), f"sdiff_{eid}")
+            e_cnt = md.NewIntVar(0, len(dates) + 400, f"ecnt_{eid}")
+            l_cnt = md.NewIntVar(0, len(dates) + 400, f"lcnt_{eid}")
+            # 带上周期内已有的早/晚班次数，分块求解才能跨块纠偏
+            hist_e = int(problem.history.get(eid, {}).get("early", 0))
+            hist_l = int(problem.history.get(eid, {}).get("late", 0))
+            md.Add(e_cnt == sum(early_vars) + hist_e)
+            md.Add(l_cnt == sum(late_vars) + hist_l)
+            diff = md.NewIntVar(0, len(dates) + 400, f"sdiff_{eid}")
             md.Add(diff >= e_cnt - l_cnt)
             md.Add(diff >= l_cnt - e_cnt)
             buckets["shift_balance"].append((diff, w_shift))
