@@ -212,6 +212,19 @@ export default function OverviewPage() {
           <button className="btn" onClick={() => version && downloadFile(`/api/export/versions/${version.id}.xlsx`, "排班表.xlsx").catch((e) => toast.push(e.message, "error"))}>
             导出 Excel
           </button>
+          <button
+            className="btn"
+            title="按钉钉考勤排班表格式导出，用于上交人力"
+            onClick={() =>
+              version &&
+              downloadFile(
+                `/api/export/versions/${version.id}/dingtalk.xlsx`,
+                `柯达广州塔排班表${version.start_date}-${version.end_date}.xlsx`,
+              ).catch((e) => toast.push(e.message, "error"))
+            }
+          >
+            导出钉钉表
+          </button>
           <button className="btn btn-primary" disabled={!version || version.status === "published"} onClick={() => setPublishOpen(true)}>
             发布班表
           </button>

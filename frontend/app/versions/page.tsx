@@ -139,6 +139,18 @@ export default function VersionsPage() {
                           >
                             导出
                           </button>
+                          <button
+                            className="btn btn-sm"
+                            title="按钉钉考勤排班表格式导出，用于上交人力"
+                            onClick={() =>
+                              downloadFile(
+                                `/api/export/versions/${v.id}/dingtalk.xlsx`,
+                                `柯达广州塔排班表${v.start_date}-${v.end_date}.xlsx`,
+                              ).catch((e) => toast.push(e.message, "error"))
+                            }
+                          >
+                            导出钉钉表
+                          </button>
                           {v.status === "draft" ? (
                             <button
                               className="btn btn-sm btn-danger"

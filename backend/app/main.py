@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
 from .config import BASE_DIR, settings
-from .db import Base, SessionLocal, engine
+from .db import Base, SessionLocal, engine, ensure_schema
 from .models import User
 from .routers import audit, auth, availability, demands, employees, excel, positions, scheduler, settings_router, stats
 from .security import hash_password
@@ -37,6 +37,7 @@ for module in (auth, employees, positions, demands, availability, scheduler, sta
 @app.on_event("startup")
 def on_startup() -> None:
     Base.metadata.create_all(bind=engine)
+    ensure_schema()
     db: Session = SessionLocal()
     try:
         ensure_defaults(db)

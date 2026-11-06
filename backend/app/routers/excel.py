@@ -16,6 +16,8 @@ from ..deps import get_current_user, write_audit
 from ..models import Employee, EmployeePositionSkill, EmployeeTypeOption, OperationalRole, Position, ScheduleVersion, User
 from ..schemas import EmployeeIn
 from ..services.matrix import CELL_LEAVE, CELL_REST, CELL_WORK, WEEKDAY_CN, version_matrix
+from ..services.dingtalk_export import build_workbook as build_dingtalk_workbook
+from ..services.dingtalk_export import filename_for as dingtalk_filename
 from ..services.stats import version_stats
 from ..services.validation import validate_assignments
 
@@ -325,6 +327,34 @@ def export_version(version_id: int, db: Session = Depends(get_db), user: User = 
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"},
+    )
+
+
+@router.get("/export/versions/{version_id}/dingtalk.xlsx")
+def export_dingtalk(version_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """按人力上交模板（钉钉考勤排班表）导出：格子=班次名/休，未排班留空。"""
+    version = db.get(ScheduleVersion, version_id)
+    if not version:
+        raise HTTPException(404, "版本不存在")
+    wb, warnings = build_dingtalk_workbook(db, version)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = dingtalk_filename(version)
+    write_audit(
+        db, user.username, "export_dingtalk", "schedule_version", str(version.id),
+        f"导出钉钉排班表：{filename}" + (f"（{'；'.join(warnings)}）" if warnings else ""),
+    )
+    db.commit()
+    quoted = quote(filename)
+    headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"}
+    if warnings:
+        # 前端读取该头做提示（缺用户ID/岗位未配置班次名）
+        headers["X-Export-Warnings"] = quote("；".join(warnings))[:900]
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
     )
 
 

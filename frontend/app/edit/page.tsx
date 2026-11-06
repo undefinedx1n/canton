@@ -30,6 +30,39 @@ function EditInner() {
   const [violations, setViolations] = useState<Violation[]>([]);
   const [pendingConflict, setPendingConflict] = useState<{ violations: Violation[]; apply: () => Promise<void> } | null>(null);
   const [showOnlyAssigned, setShowOnlyAssigned] = useState(false);
+  const [swapOpen, setSwapOpen] = useState(false);
+  const [swapDate, setSwapDate] = useState("");
+  const [swapA, setSwapA] = useState<number | "">("");
+  const [swapB, setSwapB] = useState<number | "">("");
+  const [swapping, setSwapping] = useState(false);
+
+  async function doSwap() {
+    if (!version || !swapDate || swapA === "" || swapB === "") {
+      toast.push("请选择日期和两名员工", "error");
+      return;
+    }
+    if (swapA === swapB) {
+      toast.push("请选择两名不同的员工", "error");
+      return;
+    }
+    setSwapping(true);
+    try {
+      const res = await post<{ version: VersionDetail }>(`/api/schedule/versions/${version.id}/swap`, {
+        work_date: swapDate,
+        employee_a: swapA,
+        employee_b: swapB,
+      });
+      await loadVersion(res.version?.id ?? version.id);
+      setSwapOpen(false);
+      setSwapA("");
+      setSwapB("");
+      toast.push("已互换两人当天的岗位与班次", "ok");
+    } catch (e: any) {
+      toast.push(e?.message || "互换失败", "error");
+    } finally {
+      setSwapping(false);
+    }
+  }
 
   const loadVersion = useCallback(async (id: number | null) => {
     const url = id ? `/api/schedule/versions/${id}` : `/api/schedule/current`;
@@ -288,6 +321,9 @@ function EditInner() {
           <button className="btn" onClick={() => { setDraft(JSON.parse(JSON.stringify(original))); toast.push("已撤销未保存的更改"); }}>
             撤销更改
           </button>
+          <button className="btn" onClick={() => setSwapOpen(true)}>
+            调班互换
+          </button>
           <button className="btn" disabled={saving} onClick={reoptimize}>
             锁定后重新优化
           </button>
@@ -461,6 +497,64 @@ function EditInner() {
           </Card>
         </div>
       </div>
+
+      <Modal
+        open={swapOpen}
+        onClose={() => setSwapOpen(false)}
+        title="调班互换"
+        footer={
+          <>
+            <button className="btn" onClick={() => setSwapOpen(false)}>
+              取消
+            </button>
+            <button className="btn btn-primary" disabled={swapping} onClick={doSwap}>
+              {swapping ? "互换中…" : "确认互换"}
+            </button>
+          </>
+        }
+      >
+        <p className="text-xs text-slate-600">
+          同一天两名员工互换岗位与班次（岗位变了班次跟着变）。互换后记为人工调整，重新优化时不会被挪走。
+        </p>
+        <div className="mt-3 grid gap-2">
+          <label className="text-xs text-slate-600">
+            日期
+            <select className="input mt-1" value={swapDate} onChange={(e) => setSwapDate(e.target.value)}>
+              <option value="">请选择日期</option>
+              {dates.map((d) => (
+                <option key={d} value={d}>
+                  {fmtDate(d)} {weekdayCN(d)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-slate-600">
+            员工 A
+            <select className="input mt-1" value={swapA} onChange={(e) => setSwapA(e.target.value ? Number(e.target.value) : "")}>
+              <option value="">请选择员工</option>
+              {employees.map((emp) => (
+                <option key={emp.id} value={emp.id}>
+                  {emp.name}
+                  {swapDate && draft[keyOf(swapDate, emp.id)] ? `（${draft[keyOf(swapDate, emp.id)].position}）` : "（当天无排班）"}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs text-slate-600">
+            员工 B
+            <select className="input mt-1" value={swapB} onChange={(e) => setSwapB(e.target.value ? Number(e.target.value) : "")}>
+              <option value="">请选择员工</option>
+              {employees.map((emp) => (
+                <option key={emp.id} value={emp.id}>
+                  {emp.name}
+                  {swapDate && draft[keyOf(swapDate, emp.id)] ? `（${draft[keyOf(swapDate, emp.id)].position}）` : "（当天无排班）"}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="text-[11px] text-slate-400">只有当天两人都已有排班才能互换；缺的那天请先在表格里补上。</p>
+        </div>
+      </Modal>
 
       <Modal
         open={!!pendingConflict}

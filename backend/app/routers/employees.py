@@ -74,6 +74,8 @@ def create_employee(payload: EmployeeIn, db: Session = Depends(get_db), user: Us
     emp = Employee(**payload.model_dump(exclude={"skills"}))
     if not emp.employee_no:
         emp.employee_no = None
+    if not emp.external_user_id:
+        emp.external_user_id = None
     db.add(emp)
     db.flush()
     for s in payload.skills:
@@ -92,6 +94,8 @@ def update_employee(employee_id: int, payload: EmployeeIn, db: Session = Depends
     before = _payload_dict(emp)
     for k, v in payload.model_dump(exclude={"skills"}).items():
         setattr(emp, k, v)
+    if not emp.external_user_id:
+        emp.external_user_id = None
     db.query(EmployeePositionSkill).filter(EmployeePositionSkill.employee_id == emp.id).delete()
     for s in payload.skills:
         db.add(EmployeePositionSkill(employee_id=emp.id, **s.model_dump()))
@@ -242,6 +246,47 @@ def batch_delete_employees(
         "skipped": skipped,
     }
 
+
+
+# ---------------------------- 钉钉用户ID 回填 -------------------------------- #
+class ExternalIdIn(BaseModel):
+    name: str
+    external_user_id: str
+
+
+@router.post("/employees/external-ids")
+def import_external_ids(payload: list[ExternalIdIn], db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """按姓名回填钉钉用户ID（导出考勤排班表用）。
+
+    只写 `external_user_id`，不动其他档案字段；同名多人时不猜，放进 ambiguous 让人工处理。
+    """
+    by_name: dict[str, list[Employee]] = {}
+    for e in db.query(Employee).all():
+        by_name.setdefault(e.name.strip(), []).append(e)
+
+    updated, missing, ambiguous = 0, [], []
+    for item in payload:
+        name = item.name.strip()
+        value = item.external_user_id.strip()
+        if not name or not value:
+            continue
+        hits = by_name.get(name) or []
+        if not hits:
+            missing.append(name)
+            continue
+        if len(hits) > 1:
+            ambiguous.append(name)
+            continue
+        emp = hits[0]
+        if emp.external_user_id != value:
+            emp.external_user_id = value
+            updated += 1
+    write_audit(
+        db, user.username, "import_external_ids", "employee", "",
+        f"回填钉钉用户ID：更新 {updated} 人，未匹配 {len(missing)} 人，重名 {len(ambiguous)} 人",
+    )
+    db.commit()
+    return {"updated": updated, "missing": missing, "ambiguous": ambiguous}
 
 
 # ------------------------------- 员工类型 ---------------------------------- #

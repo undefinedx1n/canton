@@ -52,6 +52,8 @@ class SkillOut(ORMBase):
 class EmployeeIn(BaseModel):
     name: str
     employee_no: str | None = None
+    # 钉钉用户ID（导出考勤排班表用，可空）
+    external_user_id: str | None = None
     employment_type: str = "long_term"
     job_title: str = "普通员工"
     is_supervisor: bool = False
@@ -68,6 +70,7 @@ class EmployeeIn(BaseModel):
 class EmployeeOut(ORMBase):
     id: int
     employee_no: str | None
+    external_user_id: str | None = None
     name: str
     employment_type: str
     job_title: str
@@ -294,6 +297,14 @@ class AssignmentPatch(BaseModel):
     role_code: str | None = None
     is_locked: bool | None = None
     note: str | None = None
+
+
+class SwapIn(BaseModel):
+    """同一天两名员工互换岗位/班次（调班）。"""
+
+    work_date: dt.date
+    employee_a: int
+    employee_b: int
 
 
 class VersionOut(ORMBase):

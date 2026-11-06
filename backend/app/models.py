@@ -57,6 +57,8 @@ class Employee(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     employee_no: Mapped[str | None] = mapped_column(String(32), unique=True, nullable=True)
+    # 钉钉成员用户ID，仅用于「排班表导出」对接考勤后台，不参与排班逻辑
+    external_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     name: Mapped[str] = mapped_column(String(64), index=True)
     # long_term / part_time / intern / other —— 类型可维护（见 EmployeeTypeOption）
     employment_type: Mapped[str] = mapped_column(String(32), default="long_term", index=True)

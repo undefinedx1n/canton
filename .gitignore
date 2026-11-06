@@ -30,3 +30,10 @@ Thumbs.db
 # 本地临时产物
 backend/data/
 pytest.log
+build.log
+
+# 前端构建残留（本地沙箱改名产生的旧产物）
+frontend/.next.old.*
+
+# 含真实员工钉钉ID，只留在本机，不入库
+backend/tools/dingtalk_ids.json

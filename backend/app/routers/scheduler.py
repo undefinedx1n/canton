@@ -18,7 +18,7 @@ from ..models import (
     ScheduleVersion,
     User,
 )
-from ..schemas import AssignmentIn, AssignmentOut, AssignmentPatch, GenerateRequest, PublishRequest, RunOut, VersionDetailOut, VersionOut
+from ..schemas import AssignmentIn, AssignmentOut, AssignmentPatch, GenerateRequest, PublishRequest, RunOut, SwapIn, VersionDetailOut, VersionOut
 from ..services.solver import build_problem, solve
 from ..services.validation import validate_assignments
 
@@ -552,6 +552,69 @@ def delete_assignment(version_id: int, assignment_id: int, db: Session = Depends
     write_audit(db, user.username, "manual_delete", "schedule_assignment", str(assignment_id), f"删除 {before['work_date']} 员工#{before['employee_id']} 的安排", before=before)
     db.commit()
     return {"version": _version_detail(db, target), "forked": forked}
+
+
+@router.post("/versions/{version_id}/swap")
+def swap_assignments(
+    version_id: int,
+    payload: SwapIn,
+    force: bool = Query(False),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """同一天两名员工互换岗位/班次（调班）。
+
+    逐个改两格时，中间态会短暂超编/缺人（校验为提醒不阻断），
+    但对使用者来说要操作两次且容易漏。这里在一个事务里换完再统一校验。
+    """
+    version = db.get(ScheduleVersion, version_id)
+    if not version:
+        raise HTTPException(404, "版本不存在")
+    if payload.employee_a == payload.employee_b:
+        raise HTTPException(400, "请选择两名不同的员工")
+    target, forked = _ensure_editable(db, version, user)
+    rows = {
+        r.employee_id: r
+        for r in db.query(ScheduleAssignment)
+        .filter(
+            ScheduleAssignment.version_id == target.id,
+            ScheduleAssignment.work_date == payload.work_date,
+            ScheduleAssignment.employee_id.in_([payload.employee_a, payload.employee_b]),
+        )
+        .all()
+    }
+    row_a, row_b = rows.get(payload.employee_a), rows.get(payload.employee_b)
+    if not row_a or not row_b:
+        raise HTTPException(400, "所选两名员工当天都必须已有排班才能互换（缺排班请先手工补上或换一天）")
+
+    before = {
+        "a": {"employee_id": row_a.employee_id, "position_code": row_a.position_code, "shift": row_a.shift, "role_code": row_a.role_code},
+        "b": {"employee_id": row_b.employee_id, "position_code": row_b.position_code, "shift": row_b.shift, "role_code": row_b.role_code},
+    }
+    # 岗位/班次/角色三者一起换，避免"换了岗位没换班次"这种半截状态
+    row_a.position_code, row_b.position_code = row_b.position_code, row_a.position_code
+    row_a.shift, row_b.shift = row_b.shift, row_a.shift
+    row_a.role_code, row_b.role_code = row_b.role_code, row_a.role_code
+    row_a.source = "manual"
+    row_b.source = "manual"
+    db.flush()
+    issues = _validate_version(db, target)
+    errors = [i for i in issues if i["level"] == "error"]
+    if errors and not force:
+        db.rollback()
+        raise HTTPException(409, detail={"message": "互换后会产生违规排班", "violations": errors[:50]})
+    write_audit(
+        db, user.username, "manual_swap", "schedule_assignment",
+        f"{row_a.id},{row_b.id}",
+        f"{payload.work_date} 调班：#{payload.employee_a} {before['a']['position_code']} ↔ #{payload.employee_b} {before['b']['position_code']}",
+        before=before,
+        after={
+            "a": {"employee_id": row_a.employee_id, "position_code": row_a.position_code, "shift": row_a.shift, "role_code": row_a.role_code},
+            "b": {"employee_id": row_b.employee_id, "position_code": row_b.position_code, "shift": row_b.shift, "role_code": row_b.role_code},
+        },
+    )
+    db.commit()
+    return {"version": _version_detail(db, target), "violations": issues, "forked": forked}
 
 
 def _validate_version(db: Session, version: ScheduleVersion, capacity_as_error: bool = False) -> list[dict]:
